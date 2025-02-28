@@ -17,7 +17,7 @@
 #define CHANNEL "#lunar-test"
 #define WEBHOOK_PORT 3000
 
-const char *lunabot_version = "0.0.3";
+const char *lunabot_version = "0.0.4";
 
 unsigned int mainloopend;
 int irc_sock;
@@ -71,13 +71,14 @@ void *IrcConnect(void *arg) {
 	// Create socket
 	irc_sock = socket(AF_INET, SOCK_STREAM, 0);
 	if (irc_sock < 0) {
-		printf("lunabot::IrcConnect() error: socket() failed: %s", strerror(errno));
+		fprintf(stderr, "lunabot::IrcConnect() error: socket() failed: %s\n", strerror(errno));
 		exit(1);
 	}
 
 	char *ret = GetIP(SERVER);
 	if (ret == NULL) {
-		printf("lunabot::IrcConnect() error: Cannot get an IP for '%s'\n", SERVER);
+		fprintf(stderr, "lunabot::IrcConnect() error: Cannot get an IP for '%s'\n", SERVER);
+		close(irc_sock);
 		exit(1);
 	}
 
@@ -87,7 +88,8 @@ void *IrcConnect(void *arg) {
 
 	// Connect to IRC server
 	if (connect(irc_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-		printf("lunabot::IrcConnect() error: connect() failed: %s", strerror(errno));
+		fprintf(stderr, "lunabot::IrcConnect() error: connect() failed: %s", strerror(errno));
+		close(irc_sock);
 		exit(1);
 	}
 
@@ -99,7 +101,7 @@ void *IrcConnect(void *arg) {
 	const SSL_METHOD *method = TLS_method();
 	SSL_CTX *ctx = SSL_CTX_new(method);
 	if (!ctx) {
-		printf("lunabot::IrcConnect() error: Cannot create SSL context");
+		fprintf(stderr, "lunabot::IrcConnect() error: Cannot create SSL context");
 		close(irc_sock);
 		exit(1);
 	}
@@ -117,10 +119,23 @@ void *IrcConnect(void *arg) {
 	// Send IRC commands
 	sprintf(buffer, "NICK %s\r\n", NICK);
 	SSL_write(pSSL, buffer, strlen(buffer));
+
 	sprintf(buffer, "USER %s 0 * :GitHub PR IRC bot\r\n", NICK);
 	SSL_write(pSSL, buffer, strlen(buffer));
-	sprintf(buffer, "PRIVMSG NickServ :IDENTIFY your_password_here\r\n");
-	SSL_write(pSSL, buffer, strlen(buffer));
+
+	FILE *fp = fopen(".passwd", "r");
+	if (fp == NULL) {
+		fprintf(stderr, "lunabot::IrcConnect(): .passwd file not found!\n");
+	}
+	else {
+		char pass[1024];
+		fgets(pass, 1023, fp);
+		fclose(fp);
+		if (pass[strlen(pass)-1] == '\n')
+			pass[strlen(pass)-1] = '\0';
+		sprintf(buffer, "PRIVMSG NickServ :IDENTIFY %s\r\n", pass);
+		SSL_write(pSSL, buffer, strlen(buffer));
+	}
 //	sprintf(buffer, "JOIN %s\r\n", CHANNEL);
 //	SSL_write(pSSL, buffer, strlen(buffer));
 
@@ -161,8 +176,6 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 	static size_t total_size = 0;
 	static unsigned int cnt = 0;
 
-	fprintf(stderr, "WebhookCallback called: %lu\n", *upload_data_size);
-
 	// On first call, initialize buffer
 	if (*ptr == NULL) {
 		json_buffer = malloc(16384); // Initial allocation (adjust as needed)
@@ -199,7 +212,6 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 		memcpy(json_buffer + total_size, upload_data, *upload_data_size);
 		total_size += *upload_data_size;
 		json_buffer[total_size] = '\0'; // Null-terminate
-		fprintf(stderr, "!!%s!!\n", json_buffer);
 
 		*upload_data_size = 0;
 		return MHD_YES; // Continue receiving
@@ -261,6 +273,7 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 	free(json_buffer);
 	*ptr = NULL;
 	total_size = 0;
+	cnt = 0;
 
 	struct MHD_Response *response = MHD_create_response_from_buffer(16, "OK", MHD_RESPMEM_PERSISTENT);
 	int ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
