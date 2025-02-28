@@ -212,6 +212,9 @@ int VerifySignature(const char *payload, const char *signature) {
 	for (int i = 0; i < hash_len; i++)
 		snprintf(computed_signature + strlen(computed_signature), 3, "%02x", hash[i]);
 
+	if (strlen(signature) != strlen(computed_signature))
+		return 1;
+
 	// Prevent timing attack
 	unsigned int is_invalid = 0;
 	unsigned int is_dummy = 0;
