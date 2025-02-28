@@ -25,6 +25,7 @@ char server_ip[16];
 SSL *pSSL;
 #define BUFFER_SIZE 1024
 char buffer[BUFFER_SIZE];
+struct MHD_Daemon *httpdaemon;
 
 char *GetIP(char *hostname) {
 	struct addrinfo hints, *res, *p;
@@ -283,42 +284,27 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 }
 
 // Webhook server thread
-void *WebhookServerStart(void *arg) {
-	struct MHD_Daemon *daemon;
-	daemon = MHD_start_daemon(MHD_USE_SELECT_INTERNALLY, WEBHOOK_PORT, NULL, NULL,
+void WebhookServerStart(void) {
+	httpdaemon = MHD_start_daemon(MHD_USE_SELECT_INTERNALLY, WEBHOOK_PORT, NULL, NULL,
 							  &WebhookCallback, NULL, MHD_OPTION_END);
-	if (!daemon) {
+	if (!httpdaemon) {
 		fprintf(stderr, "lunabot::WebhookServerStart(): Failed to start HTTP server\n");
 		exit(1);
 	}
-
-	fprintf(stderr, "!!Webhook server running on port %d!!\n", WEBHOOK_PORT);
-
-	while (!mainloopend)
-		sleep(5);
-
-	MHD_stop_daemon(daemon);
-	return NULL;
+	else
+		fprintf(stderr, "!!Webhook server running on port %d!!\n", WEBHOOK_PORT);
 }
 
 // Program entry point
 int main() {
-	pthread_t irc_thread, webhook_thread;
-	pthread_attr_t attr;
+	WebhookServerStart();
 
+	pthread_t irc_thread;
+	pthread_attr_t attr;
 	pthread_attr_init(&attr);
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-
-	// Start the IRC bot
 	pthread_create(&irc_thread, &attr, IrcConnect, NULL);
-
-	// Start the webhook server
-	pthread_create(&webhook_thread, &attr, WebhookServerStart, NULL);
-
-	// Wait for threads to finish
 	pthread_detach(irc_thread);
-	pthread_detach(webhook_thread);
-
 	pthread_attr_destroy(&attr);
 
 	// Start reading user input from the terminal and process per-line
@@ -343,6 +329,7 @@ int main() {
 		}
 	}
 
+	MHD_stop_daemon(httpdaemon);
 	return 0;
 }
 
