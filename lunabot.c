@@ -214,9 +214,12 @@ int VerifySignature(const char *payload, const char *signature) {
 
 	// Prevent timing attack
 	unsigned int is_invalid = 0;
+	unsigned int is_dummy = 0;
 	for (int i = 0; i < strlen(signature); i++) {
 		if (signature[i] != computed_signature[i])
 			is_invalid = 1;
+		else
+			is_dummy = 0;
 	}
 	return is_invalid;
 }
