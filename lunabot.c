@@ -1,3 +1,6 @@
+/* IRC bot for Github webhook notifications
+   Copyrighted Stephane Fontaine 2025 under GPLv3
+*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
