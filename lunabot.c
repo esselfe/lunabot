@@ -17,7 +17,7 @@
 #define CHANNEL "#lunar-test"
 #define WEBHOOK_PORT 3000
 
-const char *lunabot_version = "0.0.4";
+const char *lunabot_version = "0.0.5";
 
 unsigned int mainloopend;
 int irc_sock;
@@ -26,6 +26,22 @@ SSL *pSSL;
 #define BUFFER_SIZE 1024
 char buffer[BUFFER_SIZE];
 struct MHD_Daemon *httpdaemon;
+#define NORMAL      "\003"   // default/restore
+#define BLACK       "\00301"
+#define BLUE        "\00302"
+#define GREEN       "\00303"
+#define RED         "\00304"
+#define BROWN       "\00305"
+#define PURPLE      "\00306"
+#define ORANGE      "\00307"
+#define YELLOW      "\00308"
+#define LIGHT_GREEN "\00309"
+#define CYAN        "\00310"
+#define LIGHT_CYAN  "\00311"
+#define LIGHT_BLUE  "\00312"
+#define PINK        "\00313"
+#define GREY        "\00314"
+#define LIGHT_GREY  "\00315"
 
 char *GetIP(char *hostname) {
 	struct addrinfo hints, *res, *p;
@@ -242,7 +258,8 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 					if (json_is_string(title) && json_is_string(user) && json_is_string(url)) {
 						char message[512];
 						snprintf(message, sizeof(message), 
-								 "New PR: '%s' from %s - %s", 
+								 "[%sNew PR%s]: '%s' from %s - %s",
+								 GREEN, NORMAL,
 								 json_string_value(title), 
 								 json_string_value(user), 
 								 json_string_value(url));
@@ -256,7 +273,8 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 					if (json_is_string(title) && json_is_string(user) && json_is_string(url)) {
 						char message[512];
 						snprintf(message, sizeof(message),
-							"Closed PR: '%s' from %s - %s",
+							"[%sClosed PR%s]: '%s' from %s - %s",
+							RED, NORMAL,
 							json_string_value(title),
 							json_string_value(user),
 							json_string_value(url));
