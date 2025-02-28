@@ -194,7 +194,7 @@ int VerifySignature(const char *payload, const char *signature) {
 
 	FILE *fp = fopen(".secret", "r");
 	if (fp == NULL) {
-		fprintf(stderr, "lunabot::IrcConnect(): .secret file not found!\n");
+		fprintf(stderr, "lunabot::VerifySignature(): .secret file not found!\n");
 	}
 	else {
 		fgets(secret, 1023, fp);
