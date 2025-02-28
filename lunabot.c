@@ -22,7 +22,7 @@
 #define CHANNEL "#lunar"
 #define WEBHOOK_PORT 3000
 
-const char *lunabot_version = "0.1.0";
+const char *lunabot_version = "0.1.1";
 
 unsigned int mainloopend;
 int irc_sock;
@@ -106,7 +106,7 @@ void *IrcConnect(void *arg) {
 
 	server_addr.sin_family = AF_INET;
 	server_addr.sin_port = htons(PORT);
-	server_addr.sin_addr.s_addr = inet_addr(server_ip);  // Replace with the correct IP for your IRC server
+	server_addr.sin_addr.s_addr = inet_addr(server_ip);
 
 	// Connect to IRC server
 	if (connect(irc_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
@@ -138,7 +138,7 @@ void *IrcConnect(void *arg) {
 	SSL_set1_host(pSSL, SERVER);
 	SSL_connect(pSSL);
 
-	// Send IRC commands
+	// Send basic IRC commands
 	sprintf(buffer, "NICK %s\r\n", NICK);
 	SSL_write(pSSL, buffer, strlen(buffer));
 
@@ -158,6 +158,7 @@ void *IrcConnect(void *arg) {
 		sprintf(buffer, "PRIVMSG NickServ :IDENTIFY %s\r\n", pass);
 		SSL_write(pSSL, buffer, strlen(buffer));
 	}
+// Not logged in yet, exposes hostmask, needs to be sent manually in the terminal
 //	sprintf(buffer, "JOIN %s\r\n", CHANNEL);
 //	SSL_write(pSSL, buffer, strlen(buffer));
 
@@ -290,6 +291,12 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 		cnt = 0;
 
 		if (VerifySignature(json_buffer, signature)) {
+			char *data = "<html><body><p><b>401</b>: Unauthorized</p></body></html>";
+			struct MHD_Response *response401;
+			response401 = MHD_create_response_from_buffer (strlen(data), data,
+                                            MHD_RESPMEM_PERSISTENT);
+			MHD_queue_response(connection, 401, response401);
+			MHD_destroy_response(response401);
 			fprintf(stderr, "!!Webhook signature verification failed!!\n");
 			return MHD_NO;
 		}
@@ -331,7 +338,7 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 							char message[512];
 							snprintf(message, sizeof(message),
 								"[%sMerged PR%s]: '%s' from %s - %s",
-								GREEN, NORMAL,
+								CYAN, NORMAL,
 								json_string_value(title),
 								json_string_value(user),
 								json_string_value(url));
