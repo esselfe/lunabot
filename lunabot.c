@@ -16,10 +16,10 @@
 #define SERVER "irc.libera.chat"
 #define PORT 6697
 #define NICK "lunabot"
-#define CHANNEL "#lunar-test"
+#define CHANNEL "#lunar"
 #define WEBHOOK_PORT 3000
 
-const char *lunabot_version = "0.0.6";
+const char *lunabot_version = "0.1.0";
 
 unsigned int mainloopend;
 int irc_sock;
