@@ -203,7 +203,6 @@ int VerifySignature(const char *payload, const char *signature) {
 			secret[strlen(secret)-1] = '\0';
 	}
 
-	//ComputeSHA256(SECRET, payload, hmac_result, &hmac_len);
 	HMAC(EVP_sha256(), secret, strlen(secret), (unsigned char*)payload, strlen(payload),
 		hash, &hash_len);
 
@@ -213,7 +212,13 @@ int VerifySignature(const char *payload, const char *signature) {
 	for (int i = 0; i < hash_len; i++)
 		snprintf(computed_signature + strlen(computed_signature), 3, "%02x", hash[i]);
 
-	return strcmp(computed_signature, signature) == 0;
+	// Prevent timing attack
+	unsigned int is_invalid = 0;
+	for (int i = 0; i < strlen(signature); i++) {
+		if (signature[i] != computed_signature[i])
+			is_invalid = 1;
+	}
+	return is_invalid;
 }
 
 // HTTP request handler
