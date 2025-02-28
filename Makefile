@@ -1,4 +1,5 @@
 
+LDFLAGS = -lpthread -lmicrohttpd -ljansson -lssl -lcrypto
 PROGNAME=lunabot
 
 default: all
@@ -6,7 +7,7 @@ default: all
 all: $(PROGNAME)
 
 $(PROGNAME): lunabot.c
-	gcc lunabot.c -o lunabot -lpthread -lmicrohttpd -ljansson -lssl -lcrypto
+	gcc lunabot.c -o $(PROGNAME) $(LDFLAGS)
 
 clean:
 	@rm -v $(PROGNAME) || true
