@@ -6,6 +6,8 @@
 #include <netdb.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
+#include <openssl/hmac.h>
+#include <openssl/evp.h>
 #include <openssl/ssl.h>
 #include <pthread.h>
 #include <microhttpd.h>
@@ -184,6 +186,36 @@ void *IrcConnect(void *arg) {
 	return NULL;
 }
 
+// Function to verify the GitHub webhook signature
+int VerifySignature(const char *payload, const char *signature) {
+	unsigned int hash_len = 32;
+	unsigned char hash[hash_len];
+	char secret[1024];
+
+	FILE *fp = fopen(".secret", "r");
+	if (fp == NULL) {
+		fprintf(stderr, "lunabot::IrcConnect(): .secret file not found!\n");
+	}
+	else {
+		fgets(secret, 1023, fp);
+		fclose(fp);
+		if (secret[strlen(secret)-1] == '\n')
+			secret[strlen(secret)-1] = '\0';
+	}
+
+	//ComputeSHA256(SECRET, payload, hmac_result, &hmac_len);
+	HMAC(EVP_sha256(), secret, strlen(secret), (unsigned char*)payload, strlen(payload),
+		hash, &hash_len);
+
+	char computed_signature[128];
+	memset(computed_signature, 0, 128);
+	snprintf(computed_signature, sizeof(computed_signature), "sha256=");
+	for (int i = 0; i < hash_len; i++)
+		snprintf(computed_signature + strlen(computed_signature), 3, "%02x", hash[i]);
+
+	return strcmp(computed_signature, signature) == 0;
+}
+
 // HTTP request handler
 static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connection, 
 		const char *url, const char *method, 
@@ -192,6 +224,10 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 	static char *json_buffer = NULL;
 	static size_t total_size = 0;
 	static unsigned int cnt = 0;
+
+	const char *signature = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "X-Hub-Signature-256");
+	if (!signature)
+		return MHD_NO; // Missing signature
 
 	// On first call, initialize buffer
 	if (*ptr == NULL) {
@@ -238,6 +274,11 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 		fprintf(stderr, "!!Received full webhook JSON: %s!!\n", json_buffer); // Debugging
 
 		cnt = 0;
+
+		if (!VerifySignature(json_buffer, signature)) {
+			fprintf(stderr, "!!Webhook signature verification failed!!\n");
+			return MHD_NO;
+		}
 
 		json_t *root;
 		json_error_t error;
