@@ -286,7 +286,7 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 
 		cnt = 0;
 
-		if (!VerifySignature(json_buffer, signature)) {
+		if (VerifySignature(json_buffer, signature)) {
 			fprintf(stderr, "!!Webhook signature verification failed!!\n");
 			return MHD_NO;
 		}
