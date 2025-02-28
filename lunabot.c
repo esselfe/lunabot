@@ -311,20 +311,35 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 					json_t *title = json_object_get(pr, "title");
 					json_t *user = json_object_get(json_object_get(pr, "user"), "login");
 					json_t *url = json_object_get(pr, "html_url");
-					if (json_is_string(title) && json_is_string(user) && json_is_string(url)) {
-						char message[512];
-						snprintf(message, sizeof(message),
-							"[%sClosed PR%s]: '%s' from %s - %s",
-							RED, NORMAL,
-							json_string_value(title),
-							json_string_value(user),
-							json_string_value(url));
-						SendIrcMessage(message);
+					json_t *is_merged = json_object_get(pr, "merged");
+					if (is_merged != NULL && json_is_true(is_merged)) {
+						if (json_is_string(title) && json_is_string(user) && json_is_string(url)) {
+							char message[512];
+							snprintf(message, sizeof(message),
+								"[%sMerged PR%s]: '%s' from %s - %s",
+								GREEN, NORMAL,
+								json_string_value(title),
+								json_string_value(user),
+								json_string_value(url));
+							SendIrcMessage(message);
+						}
+					}
+					else {
+						if (json_is_string(title) && json_is_string(user) && json_is_string(url)) {
+							char message[512];
+							snprintf(message, sizeof(message),
+								"[%sClosed PR%s]: '%s' from %s - %s",
+								RED, NORMAL,
+								json_string_value(title),
+								json_string_value(user),
+								json_string_value(url));
+							SendIrcMessage(message);
+						}
 					}
 				}
 			}
 			else
-				fprintf(stderr, "\033[01;31mGot webhook data without a conditional branch for it!\033[00m");
+				fprintf(stderr, "\033[01;31mGot webhook data without a conditional branch for it!\033[00m\n");
 
 			json_decref(root);
 		}
