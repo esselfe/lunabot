@@ -19,7 +19,7 @@
 #define CHANNEL "#lunar-test"
 #define WEBHOOK_PORT 3000
 
-const char *lunabot_version = "0.0.5";
+const char *lunabot_version = "0.0.6";
 
 unsigned int mainloopend;
 int irc_sock;
@@ -55,7 +55,7 @@ char *GetIP(char *hostname) {
 	hints.ai_socktype = SOCK_STREAM;
 
 	if ((status = getaddrinfo(hostname, NULL, &hints, &res)) != 0) {
-		printf("lunabot::GetIP() error: getaddrinfo() failed: %s\n", gai_strerror(status));
+		fprintf(stderr, "lunabot::GetIP() error: getaddrinfo() failed: %s\n", gai_strerror(status));
 		return NULL;
 	}
 
@@ -324,7 +324,8 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 				}
 			}
 			else
-				SendIrcMessage("Got webhook data without a conditional branch for it!");
+				fprintf(stderr, "\033[01;31mGot webhook data without a conditional branch for it!\033[00m");
+
 			json_decref(root);
 		}
 	}
