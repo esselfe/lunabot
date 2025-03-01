@@ -346,8 +346,8 @@ void ParseJsonData(char *json_data) {
 			*status_str = 'S';
 			color = GREEN;
 		}
-		else if (strcmp(status_str, "failed") == 0) {
-			*status_str = 'F';
+		else if (strcmp(status_str, "failure") == 0) {
+			sprintf(status_str, "%s", "Failed");
 			color = RED;
 		}
 
