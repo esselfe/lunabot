@@ -556,8 +556,8 @@ int main() {
 		if (ret == NULL)
 			continue;
 		else {
-			if (buffer_line[strlen(buffer_line)] == '\n')
-				buffer_line[strlen(buffer_line)] = '\0';
+			if (buffer_line[strlen(buffer_line) - 1] == '\n')
+				buffer_line[strlen(buffer_line) - 1] = '\0';
 		}
 
 		if (strncmp(buffer_line, "exit", 4) == 0 || strcmp(buffer_line, "quit") == 0 ||
