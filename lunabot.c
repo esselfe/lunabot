@@ -316,7 +316,8 @@ void ParseJsonData(char *json_data) {
 			return;
 		}
 		json_t *target_url = json_object_get(root, "target_url");
-		if (!json_is_string(target_url)) { // Wait for the second event
+		// Wait for the second event, the first one doesn't have target_url set
+		if (json_is_string(target_url) && strlen(json_string_value(target_url)) == 0) {
 			json_decref(root);
 			return;
 		}
