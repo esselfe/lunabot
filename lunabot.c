@@ -410,14 +410,15 @@ int main() {
 		char *ret = fgets(buffer_line, BUFFER_SIZE - 2, stdin);
 		if (ret == NULL)
 			continue;
+		else
+			if (buffer_line[strlen(buffer_line)] == '\n')
+				buffer_line[strlen(buffer_line)] = '\0';
 
-		if (strncmp(buffer_line, "exit", 4) == 0 || strncmp(buffer_line, "quit", 4) == 0 ||
+		if (strncmp(buffer_line, "exit", 4) == 0 || strcmp(buffer_line, "quit") == 0 ||
 		  strncmp(buffer_line, "qw", 2) == 0)
 			mainloopend = 1;
-		else if (strlen(buffer_line) > 0 && *buffer_line != '\n') { // Send to server, this is a raw message!
-			if (buffer_line[strlen(buffer_line)-1] == '\n')
-				buffer_line[strlen(buffer_line)-1] = '\0';
-
+		else if (strlen(buffer_line) > 0 && *buffer_line != '\n') {
+			// Send to server, this is a raw message!
 			char buffer2[BUFFER_SIZE * 2];
 			memset(buffer2, 0, BUFFER_SIZE * 2);
 			sprintf(buffer2, "%s\r\n", buffer_line);
