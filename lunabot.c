@@ -150,8 +150,8 @@ void *IrcConnect(void *arg) {
 		fprintf(stderr, "lunabot::IrcConnect(): .passwd file not found!\n");
 	}
 	else {
-		char pass[1024];
-		fgets(pass, 1023, fp);
+		char pass[BUFFER_SIZE - 30];
+		fgets(pass, BUFFER_SIZE - 31, fp);
 		fclose(fp);
 		if (pass[strlen(pass)-1] == '\n')
 			pass[strlen(pass)-1] = '\0';
