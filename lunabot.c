@@ -24,7 +24,7 @@
 #define CHANNEL "#lunar"
 #define WEBHOOK_PORT 3000
 
-const char *lunabot_version = "0.1.1";
+const char *lunabot_version = "0.1.2";
 
 unsigned int mainloopend;
 int irc_sock;
@@ -55,12 +55,15 @@ struct MHD_Daemon *httpdaemon;
 #define LOCAL 0
 #define IN    1
 #define OUT   2
-FILE *log_fp;
 char *log_filename = "lunabot.log";
 
 void Log(unsigned int direction, char *text) {
-	if (log_fp == NULL)
-		return;
+	FILE *log_fp = fopen(log_filename, "a+");
+	if (log_fp == NULL) {
+		fprintf(stderr, "lunabot::main() error: Cannot open '%s': %s\n",
+			log_filename, strerror(errno));
+		exit(1);
+	}
 
 	char *dirstr;
 	if (direction == LOCAL)
@@ -71,7 +74,7 @@ void Log(unsigned int direction, char *text) {
 		dirstr = ">>";
 	else
 		dirstr = "!!";
-
+	
 	time_t t0 = time(NULL);
 	struct tm *tm0 = gmtime(&t0);
 	struct timeval tv0;
@@ -84,10 +87,12 @@ void Log(unsigned int direction, char *text) {
 
 	// Show message in console with colors
 	fprintf(stdout, "\033[00;36m%04d%02d%02d-%02d:%02d:%02d.%06ld %s"
-		"##\033[00m%s\033[00;36m##\033[00m\n",
+		"##\033[00m%s\033[00;36m##\033[00m\n", 
 		tm0->tm_year+1900, tm0->tm_mon+1, tm0->tm_mday,
 		tm0->tm_hour, tm0->tm_min, tm0->tm_sec, tv0.tv_usec,
 		dirstr, text);
+	
+	fclose(log_fp);
 }
 
 char *GetIP(char *hostname) {
@@ -256,7 +261,7 @@ int VerifySignature(const char *payload, const char *signature) {
 	else {
 		fgets(secret, 1023, fp);
 		fclose(fp);
-
+		
 		// Strip newline ending
 		if (secret[strlen(secret)-1] == '\n')
 			secret[strlen(secret)-1] = '\0';
@@ -286,6 +291,134 @@ int VerifySignature(const char *payload, const char *signature) {
 	return is_invalid;
 }
 
+void ParseJsonData(char *json_data) {
+	json_t *root;
+	json_error_t error;
+	root = json_loads(json_data, 0, &error);
+
+	if (!root) {
+		sprintf(buffer_log, "JSON parsing error: %s", error.text);
+		Log(LOCAL, buffer_log);
+		return;
+	}
+	
+	// Process CI build statuses
+	json_t *context = json_object_get(root, "context");
+	if (json_is_string(context)) {
+		if (strcmp(json_string_value(context), "default") != 0) {
+			json_decref(root);
+			return;
+		}
+
+		json_t *status = json_object_get(root, "state");
+		if (!json_is_string(status)) {
+			json_decref(root);
+			return;
+		}
+		json_t *target_url = json_object_get(root, "target_url");
+		if (!json_is_string(target_url)) { // Wait for the second event
+			json_decref(root);
+			return;
+		}
+		json_t *commit_outer = json_object_get(root, "commit");
+		if (!json_is_object(commit_outer)) {
+			json_decref(root);
+			return;
+		}
+		json_t *commit_inner = json_object_get(commit_outer, "commit");
+		if (!json_is_object(commit_inner)) {
+			json_decref(root);
+			return;
+		}
+		json_t *msg = json_object_get(commit_inner, "message");
+		if (!json_is_string(msg)) {
+			json_decref(root);
+			return;
+		}
+		char *color;
+		char *status_str = strdup(json_string_value(status));
+		if (strcmp(status_str, "pending") == 0) {
+			*status_str = 'P';
+			color = YELLOW;
+		}
+		else if (strcmp(status_str, "success") == 0) {
+			*status_str = 'S';
+			color = GREEN;
+		}
+		else if (strcmp(status_str, "failed") == 0) {
+			*status_str = 'F';
+			color = RED;
+		}
+
+		char message[512];
+		snprintf(message, sizeof(message),
+			"[%s%s%s]: '%s' %s",
+			color, status_str, NORMAL,
+			json_string_value(msg), 
+			json_string_value(target_url));
+		SendIrcMessage(message);
+		free(status_str);
+	
+		return;
+	}
+	
+	// Process PR ops
+	json_t *action = json_object_get(root, "action");
+	json_t *pr = json_object_get(root, "pull_request");
+	if (json_is_string(action) && json_is_object(pr)) {
+		if (strcmp(json_string_value(action), "opened") == 0) {
+			json_t *title = json_object_get(pr, "title");
+			json_t *user = json_object_get(json_object_get(pr, "user"), "login");
+			json_t *url = json_object_get(pr, "html_url");
+
+			if (json_is_string(title) && json_is_string(user) && json_is_string(url)) {
+				char message[512];
+				snprintf(message, sizeof(message), 
+						 "[%sNew PR%s]: '%s' from %s - %s",
+						 GREEN, NORMAL,
+						 json_string_value(title), 
+						 json_string_value(user), 
+						 json_string_value(url));
+				SendIrcMessage(message);
+			}
+		}
+		else if (strcmp(json_string_value(action), "closed") == 0) {
+			json_t *title = json_object_get(pr, "title");
+			json_t *user = json_object_get(json_object_get(pr, "user"), "login");
+			json_t *url = json_object_get(pr, "html_url");
+			json_t *is_merged = json_object_get(pr, "merged");
+			if (is_merged != NULL && json_is_true(is_merged)) {
+				if (json_is_string(title) && json_is_string(user) && json_is_string(url)) {
+					char message[512];
+					snprintf(message, sizeof(message),
+						"[%sMerged PR%s]: '%s' from %s - %s",
+						CYAN, NORMAL,
+						json_string_value(title),
+						json_string_value(user),
+						json_string_value(url));
+					SendIrcMessage(message);
+				}
+			}
+			else {
+				if (json_is_string(title) && json_is_string(user) && json_is_string(url)) {
+					char message[512];
+					snprintf(message, sizeof(message),
+						"[%sClosed PR%s]: '%s' from %s - %s",
+						RED, NORMAL,
+						json_string_value(title),
+						json_string_value(user),
+						json_string_value(url));
+					SendIrcMessage(message);
+				}
+			}
+		}
+	}
+	else
+		Log(LOCAL, "Got webhook data without a conditional branch for it!");
+
+	json_decref(root);
+}
+
 // HTTP request handler
 static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connection, 
 		const char *url, const char *method, 
@@ -296,8 +429,16 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 	static unsigned int cnt = 0;
 
 	const char *signature = MHD_lookup_connection_value(connection, MHD_HEADER_KIND, "X-Hub-Signature-256");
-	if (!signature)
-		return MHD_NO; // Missing signature
+	if (!signature) {
+		char *data = "<html><body><h2>401 Unauthorized</h2></body></html>";
+		struct MHD_Response *response401;
+		response401 = MHD_create_response_from_buffer(strlen(data),
+				data, MHD_RESPMEM_PERSISTENT);
+		int ret = MHD_queue_response(connection, 401, response401);
+		MHD_destroy_response(response401);
+		Log(LOCAL, "Webhook signature verification failed!");
+		return ret;
+	}
 
 	// On first call, initialize buffer
 	if (*ptr == NULL) {
@@ -341,8 +482,8 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 	}
 	// If we have all data, process JSON
 	else if (*upload_data_size == 0 && cnt >= 1) {
-		sprintf(buffer_log, "Received full webhook JSON: %s", json_buffer);
-		Log(IN, buffer_log);
+		Log(LOCAL, "Received full webhook JSON:");
+		Log(IN, json_buffer);
 
 		cnt = 0;
 
@@ -357,71 +498,7 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 			return ret;
 		}
 
-		json_t *root;
-		json_error_t error;
-		root = json_loads(json_buffer, 0, &error);
-
-		if (!root) {
-			sprintf(buffer_log, "JSON parsing error: %s", error.text);
-			Log(LOCAL, buffer_log);
-			return MHD_NO;
-		} else {
-			json_t *action = json_object_get(root, "action");
-			json_t *pr = json_object_get(root, "pull_request");
-
-			if (json_is_string(action) && json_is_object(pr)) {
-				if (strcmp(json_string_value(action), "opened") == 0) {
-					json_t *title = json_object_get(pr, "title");
-					json_t *user = json_object_get(json_object_get(pr, "user"), "login");
-					json_t *url = json_object_get(pr, "html_url");
-
-					if (json_is_string(title) && json_is_string(user) && json_is_string(url)) {
-						char message[512];
-						snprintf(message, sizeof(message), 
-								 "[%sNew PR%s]: '%s' from %s - %s",
-								 GREEN, NORMAL,
-								 json_string_value(title), 
-								 json_string_value(user), 
-								 json_string_value(url));
-						SendIrcMessage(message);
-					}
-				}
-				else if (strcmp(json_string_value(action), "closed") == 0) {
-					json_t *title = json_object_get(pr, "title");
-					json_t *user = json_object_get(json_object_get(pr, "user"), "login");
-					json_t *url = json_object_get(pr, "html_url");
-					json_t *is_merged = json_object_get(pr, "merged");
-					if (is_merged != NULL && json_is_true(is_merged)) {
-						if (json_is_string(title) && json_is_string(user) && json_is_string(url)) {
-							char message[512];
-							snprintf(message, sizeof(message),
-								"[%sMerged PR%s]: '%s' from %s - %s",
-								CYAN, NORMAL,
-								json_string_value(title),
-								json_string_value(user),
-								json_string_value(url));
-							SendIrcMessage(message);
-						}
-					}
-					else {
-						if (json_is_string(title) && json_is_string(user) && json_is_string(url)) {
-							char message[512];
-							snprintf(message, sizeof(message),
-								"[%sClosed PR%s]: '%s' from %s - %s",
-								RED, NORMAL,
-								json_string_value(title),
-								json_string_value(user),
-								json_string_value(url));
-							SendIrcMessage(message);
-						}
-					}
-				}
-			}
-			else
-				Log(LOCAL, "Got webhook data without a conditional branch for it!");
-
-			json_decref(root);
-		}
+		ParseJsonData(json_buffer);
 	}
 
 	// Clean up and send response
@@ -453,13 +530,6 @@ void WebhookServerStart(void) {
 
 // Program entry point
 int main() {
-	log_fp = fopen(log_filename, "a+");
-	if (log_fp == NULL) {
-		fprintf(stderr, "lunabot::main() error: Cannot open '%s': %s\n",
-			log_filename, strerror(errno));
-		exit(1);
-	}
-
 	WebhookServerStart();
 
 	pthread_t irc_thread;
@@ -498,9 +568,6 @@ int main() {
 	}
 
 	MHD_stop_daemon(httpdaemon);
-	if (log_fp != NULL)
-		fclose(log_fp);
-
 	return 0;
 }
 
