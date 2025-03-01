@@ -6,6 +6,8 @@
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
+#include <time.h>
+#include <sys/time.h>
 #include <netdb.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -30,6 +32,7 @@ char server_ip[16];
 SSL *pSSL;
 #define BUFFER_SIZE 1024
 char buffer[BUFFER_SIZE];
+char buffer_log[BUFFER_SIZE * 4];
 struct MHD_Daemon *httpdaemon;
 #define NORMAL      "\003"   // default/restore
 #define BLACK       "\00301"
@@ -48,6 +51,45 @@ struct MHD_Daemon *httpdaemon;
 #define GREY        "\00314"
 #define LIGHT_GREY  "\00315"
 
+// Logging directions, to help parsing output using << || >>
+#define LOCAL 0
+#define IN    1
+#define OUT   2
+FILE *log_fp;
+char *log_filename = "lunabot.log";
+
+void Log(unsigned int direction, char *text) {
+	if (log_fp == NULL)
+		return;
+
+	char *dirstr;
+	if (direction == LOCAL)
+		dirstr = "||";
+	else if (direction == IN)
+		dirstr = "<<";
+	else if (direction == OUT)
+		dirstr = ">>";
+	else
+		dirstr = "!!";
+
+	time_t t0 = time(NULL);
+	struct tm *tm0 = gmtime(&t0);
+	struct timeval tv0;
+	gettimeofday(&tv0, NULL);
+
+	fprintf(log_fp, "%04d%02d%02d-%02d:%02d:%02d.%06ld %s##%s##\n",
+		tm0->tm_year+1900, tm0->tm_mon+1, tm0->tm_mday,
+		tm0->tm_hour, tm0->tm_min, tm0->tm_sec, tv0.tv_usec,
+		dirstr, text);
+
+	// Show message in console with colors
+	fprintf(stdout, "\033[00;36m%04d%02d%02d-%02d:%02d:%02d.%06ld %s"
+		"##\033[00m%s\033[00;36m##\033[00m\n",
+		tm0->tm_year+1900, tm0->tm_mon+1, tm0->tm_mday,
+		tm0->tm_hour, tm0->tm_min, tm0->tm_sec, tv0.tv_usec,
+		dirstr, text);
+}
+
 char *GetIP(char *hostname) {
 	struct addrinfo hints, *res, *p;
 	int status;
@@ -58,7 +100,8 @@ char *GetIP(char *hostname) {
 	hints.ai_socktype = SOCK_STREAM;
 
 	if ((status = getaddrinfo(hostname, NULL, &hints, &res)) != 0) {
-		fprintf(stderr, "lunabot::GetIP() error: getaddrinfo() failed: %s\n", gai_strerror(status));
+		sprintf(buffer_log, "lunabot::GetIP() error: getaddrinfo() failed: %s", gai_strerror(status));
+		Log(LOCAL, buffer_log);
 		return NULL;
 	}
 
@@ -77,10 +120,12 @@ char *GetIP(char *hostname) {
 
 	freeaddrinfo(res);
 	return NULL; // No IP found
+
 }
 
 // Function to send messages to the IRC channel
 void SendIrcMessage(const char *message) {
+	Log(OUT, (char *)message);
 	char buffer_msg[4096];
 	snprintf(buffer_msg, sizeof(buffer_msg), "PRIVMSG %s :%s\r\n", CHANNEL, message);
 	SSL_write(pSSL, buffer_msg, strlen(buffer_msg));
@@ -93,13 +138,15 @@ void *IrcConnect(void *arg) {
 	// Create socket
 	irc_sock = socket(AF_INET, SOCK_STREAM, 0);
 	if (irc_sock < 0) {
-		fprintf(stderr, "lunabot::IrcConnect() error: socket() failed: %s\n", strerror(errno));
+		sprintf(buffer_log, "lunabot::IrcConnect() error: socket() failed: %s", strerror(errno));
+		Log(LOCAL, buffer_log);
 		exit(1);
 	}
 
 	char *ret = GetIP(SERVER);
 	if (ret == NULL) {
-		fprintf(stderr, "lunabot::IrcConnect() error: Cannot get an IP for '%s'\n", SERVER);
+		sprintf(buffer_log, "lunabot::IrcConnect() error: Cannot get an IP for '%s'", SERVER);
+		Log(LOCAL, buffer_log);
 		close(irc_sock);
 		exit(1);
 	}
@@ -110,7 +157,8 @@ void *IrcConnect(void *arg) {
 
 	// Connect to IRC server
 	if (connect(irc_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-		fprintf(stderr, "lunabot::IrcConnect() error: connect() failed: %s", strerror(errno));
+		sprintf(buffer_log, "lunabot::IrcConnect() error: connect() failed: %s", strerror(errno));
+		Log(LOCAL, buffer_log);
 		close(irc_sock);
 		exit(1);
 	}
@@ -123,7 +171,7 @@ void *IrcConnect(void *arg) {
 	const SSL_METHOD *method = TLS_method();
 	SSL_CTX *ctx = SSL_CTX_new(method);
 	if (!ctx) {
-		fprintf(stderr, "lunabot::IrcConnect() error: Cannot create SSL context");
+		Log(LOCAL, "lunabot::IrcConnect() error: Cannot create SSL context");
 		close(irc_sock);
 		exit(1);
 	}
@@ -147,7 +195,9 @@ void *IrcConnect(void *arg) {
 
 	FILE *fp = fopen(".passwd", "r");
 	if (fp == NULL) {
-		fprintf(stderr, "lunabot::IrcConnect(): .passwd file not found!\n");
+		sprintf(buffer_log, "lunabot::IrcConnect() error: Cannot open .passwd: %s", strerror(errno));
+		Log(LOCAL, buffer_log);
+		exit(1);
 	}
 	else {
 		char pass[BUFFER_SIZE - 30];
@@ -156,6 +206,7 @@ void *IrcConnect(void *arg) {
 		if (pass[strlen(pass)-1] == '\n')
 			pass[strlen(pass)-1] = '\0';
 		sprintf(buffer, "PRIVMSG NickServ :IDENTIFY %s\r\n", pass);
+		Log(OUT, "PRIVMSG NickServ :IDENTIFY ********");
 		SSL_write(pSSL, buffer, strlen(buffer));
 	}
 // Not logged in yet, exposes hostmask, needs to be sent manually in the terminal
@@ -175,12 +226,13 @@ void *IrcConnect(void *arg) {
 		if (buffer[bytes-2] == '\r')
 			buffer[bytes-2] = '\0'; // Remove '\r'
 		
-		printf("##%s##\n", buffer);
+		Log(IN, buffer);
 		
 		// Respond to ping requests with a pong message
 		if (strncmp(buffer, "PING", 4) == 0) {
+			sprintf(buffer_log, "PONG %s", buffer + 5);
+			Log(OUT, buffer_log);
 			sprintf(buffer2, "PONG %s\r\n", buffer + 5);
-			printf("%s", buffer2);
 			SSL_write(pSSL, buffer2, strlen(buffer2));
 		}
 	}
@@ -198,11 +250,14 @@ int VerifySignature(const char *payload, const char *signature) {
 
 	FILE *fp = fopen(".secret", "r");
 	if (fp == NULL) {
-		fprintf(stderr, "lunabot::VerifySignature(): .secret file not found!\n");
+		Log(LOCAL, "lunabot::VerifySignature(): .secret file not found!");
+		exit(1);
 	}
 	else {
 		fgets(secret, 1023, fp);
 		fclose(fp);
+
+		// Strip newline ending
 		if (secret[strlen(secret)-1] == '\n')
 			secret[strlen(secret)-1] = '\0';
 	}
@@ -248,7 +303,7 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 	if (*ptr == NULL) {
 		json_buffer = malloc(16384); // Initial allocation (adjust as needed)
 		if (!json_buffer) {
-			fprintf(stderr, "Memory allocation error\n");
+			Log(LOCAL, "lunabot::WebhookCallback() error: Cannot allocate memory");
 			return MHD_NO;
 		}
 		memset(json_buffer, 0, 16384);
@@ -268,7 +323,7 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 		if (new_size >= 16384) {  // Adjust buffer size if needed
 			char *temp = realloc(json_buffer, new_size + 1);
 			if (!temp) {
-				fprintf(stderr, "Memory reallocation error\n");
+				Log(LOCAL, "lunabot::WebhookCallback() error: Cannot allocate memory");
 				free(json_buffer);
 				return MHD_NO;
 			}
@@ -286,19 +341,20 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 	}
 	// If we have all data, process JSON
 	else if (*upload_data_size == 0 && cnt >= 1) {
-		fprintf(stderr, "!!Received full webhook JSON: %s!!\n", json_buffer); // Debugging
+		sprintf(buffer_log, "Received full webhook JSON: %s", json_buffer);
+		Log(IN, buffer_log);
 
 		cnt = 0;
 
 		if (VerifySignature(json_buffer, signature)) {
-			char *data = "<html><body><p><b>401</b>: Unauthorized</p></body></html>";
+			char *data = "<html><body><h2>401 Unauthorized</h2></body></html>";
 			struct MHD_Response *response401;
 			response401 = MHD_create_response_from_buffer (strlen(data), data,
                                             MHD_RESPMEM_PERSISTENT);
-			MHD_queue_response(connection, 401, response401);
+			int ret = MHD_queue_response(connection, 401, response401);
 			MHD_destroy_response(response401);
-			fprintf(stderr, "!!Webhook signature verification failed!!\n");
-			return MHD_NO;
+			Log(LOCAL, "Webhook signature verification failed!");
+			return ret;
 		}
 
 		json_t *root;
@@ -306,7 +362,9 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 		root = json_loads(json_buffer, 0, &error);
 
 		if (!root) {
-			fprintf(stderr, "!!JSON parsing error: %s!!\n", error.text);
+			sprintf(buffer_log, "JSON parsing error: %s", error.text);
+			Log(LOCAL, buffer_log);
+			return MHD_NO;
 		} else {
 			json_t *action = json_object_get(root, "action");
 			json_t *pr = json_object_get(root, "pull_request");
@@ -360,7 +418,7 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 				}
 			}
 			else
-				fprintf(stderr, "\033[01;31mGot webhook data without a conditional branch for it!\033[00m\n");
+				Log(LOCAL, "Got webhook data without a conditional branch for it!");
 
 			json_decref(root);
 		}
@@ -384,15 +442,24 @@ void WebhookServerStart(void) {
 	httpdaemon = MHD_start_daemon(MHD_USE_SELECT_INTERNALLY, WEBHOOK_PORT, NULL, NULL,
 							  &WebhookCallback, NULL, MHD_OPTION_END);
 	if (!httpdaemon) {
-		fprintf(stderr, "lunabot::WebhookServerStart(): Failed to start HTTP server\n");
+		Log(LOCAL, "lunabot::WebhookServerStart(): Failed to start HTTP server");
 		exit(1);
 	}
-	else
-		fprintf(stderr, "!!Webhook server running on port %d!!\n", WEBHOOK_PORT);
+	else {
+		sprintf(buffer_log, "Webhook server running on port %d", WEBHOOK_PORT);
+		Log(LOCAL, buffer_log);
+	}
 }
 
 // Program entry point
 int main() {
+	log_fp = fopen(log_filename, "a+");
+	if (log_fp == NULL) {
+		fprintf(stderr, "lunabot::main() error: Cannot open '%s': %s\n",
+			log_filename, strerror(errno));
+		exit(1);
+	}
+
 	WebhookServerStart();
 
 	pthread_t irc_thread;
@@ -404,20 +471,24 @@ int main() {
 	pthread_attr_destroy(&attr);
 
 	// Start reading user input from the terminal and process per-line
-	char buffer_line[1024];
+	char buffer_line[BUFFER_SIZE];
 	while(!mainloopend) {
 		memset(buffer_line, 0, BUFFER_SIZE);
-		char *ret = fgets(buffer_line, BUFFER_SIZE - 2, stdin);
+		char *ret = fgets(buffer_line, BUFFER_SIZE - 3, stdin);
 		if (ret == NULL)
 			continue;
-		else
+		else {
 			if (buffer_line[strlen(buffer_line)] == '\n')
 				buffer_line[strlen(buffer_line)] = '\0';
+		}
 
 		if (strncmp(buffer_line, "exit", 4) == 0 || strcmp(buffer_line, "quit") == 0 ||
-		  strncmp(buffer_line, "qw", 2) == 0)
+		  strncmp(buffer_line, "qw", 2) == 0) {
 			mainloopend = 1;
+			Log(LOCAL, "lunabot exited");
+		}
 		else if (strlen(buffer_line) > 0 && *buffer_line != '\n') {
+			Log(OUT, buffer_line);
 			// Send to server, this is a raw message!
 			char buffer2[BUFFER_SIZE * 2];
 			memset(buffer2, 0, BUFFER_SIZE * 2);
@@ -427,6 +498,9 @@ int main() {
 	}
 
 	MHD_stop_daemon(httpdaemon);
+	if (log_fp != NULL)
+		fclose(log_fp);
+
 	return 0;
 }
 
