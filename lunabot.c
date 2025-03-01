@@ -24,7 +24,7 @@
 #define CHANNEL "#lunar"
 #define WEBHOOK_PORT 3000
 
-const char *lunabot_version = "0.1.2";
+const char *lunabot_version = "0.1.3";
 
 unsigned int mainloopend;
 int irc_sock;
@@ -339,6 +339,7 @@ void ParseJsonData(char *json_data) {
 		char *color;
 		char *status_str = strdup(json_string_value(status));
 		if (strcmp(status_str, "pending") == 0) {
+			return; // Reduce message volume and skip those
 			*status_str = 'P';
 			color = YELLOW;
 		}
