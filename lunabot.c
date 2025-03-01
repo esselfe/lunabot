@@ -433,6 +433,7 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 		const char *version, const char *upload_data,
 		unsigned long *upload_data_size, void **ptr) {
 	static char *json_buffer = NULL;
+	static unsigned int json_buffer_size = BUFFER_SIZE * 16;
 	static size_t total_size = 0;
 	static unsigned int cnt = 0;
 
@@ -450,12 +451,12 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 
 	// On first call, initialize buffer
 	if (*ptr == NULL) {
-		json_buffer = malloc(16384); // Initial allocation (adjust as needed)
+		json_buffer = malloc(json_buffer_size); // Initial allocation (adjust as needed)
 		if (!json_buffer) {
 			Log(LOCAL, "lunabot::WebhookCallback() error: Cannot allocate memory");
 			return MHD_NO;
 		}
-		memset(json_buffer, 0, 16384);
+		memset(json_buffer, 0, json_buffer_size);
 		total_size = 0;
 		*ptr = json_buffer;
 	}
@@ -469,8 +470,9 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 		size_t new_size = total_size + *upload_data_size;
 
 		// Reallocate buffer if needed
-		if (new_size >= 16384) {  // Adjust buffer size if needed
-			char *temp = realloc(json_buffer, new_size + 1);
+		if (new_size >= json_buffer_size) {  // Adjust buffer size if needed
+			json_buffer_size = new_size + 1;
+			char *temp = realloc(json_buffer, json_buffer_size);
 			if (!temp) {
 				Log(LOCAL, "lunabot::WebhookCallback() error: Cannot allocate memory");
 				free(json_buffer);
@@ -511,6 +513,7 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 
 	// Clean up and send response
 	free(json_buffer);
+	json_buffer_size = BUFFER_SIZE * 16;
 	*ptr = NULL;
 	total_size = 0;
 	cnt = 0;
