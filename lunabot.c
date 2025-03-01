@@ -60,7 +60,7 @@ char *log_filename = "lunabot.log";
 void Log(unsigned int direction, char *text) {
 	FILE *log_fp = fopen(log_filename, "a+");
 	if (log_fp == NULL) {
-		fprintf(stderr, "lunabot::main() error: Cannot open '%s': %s\n",
+		fprintf(stderr, "lunabot::Log() error: Cannot open '%s': %s\n",
 			log_filename, strerror(errno));
 		exit(1);
 	}
