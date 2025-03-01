@@ -34,6 +34,8 @@ SSL *pSSL;
 char buffer[BUFFER_SIZE];
 char buffer_log[BUFFER_SIZE * 4];
 struct MHD_Daemon *httpdaemon;
+unsigned int ignore_pending = 1;
+// IRC color codes
 #define NORMAL      "\003"   // default/restore
 #define BLACK       "\00301"
 #define BLUE        "\00302"
@@ -339,7 +341,11 @@ void ParseJsonData(char *json_data) {
 		char *color;
 		char *status_str = strdup(json_string_value(status));
 		if (strcmp(status_str, "pending") == 0) {
-			return; // Reduce message volume and skip those
+			// Reduce message volume and skip those
+			if (ignore_pending) {
+				json_decref(root);
+				return;
+			}
 			*status_str = 'P';
 			color = YELLOW;
 		}
