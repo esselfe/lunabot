@@ -27,8 +27,9 @@ To compile and run lunabot, you will need the following dependencies installed:
  - pthread (for multithreading support).
 
 ## Build and run
-To compile the source code into an executable, type 'make' in the source directory from a terminal.
-To run the program, type './lunabot'
+To compile the source code into an executable, type 'make' in the source directory from a terminal.  
+You will need to put the bot's NickServ password in .passwd and the webhook secret in .secret.  
+To run the program, type './lunabot'  
 
 ## Author
 Stephane Fontaine (esselfe) 2025
