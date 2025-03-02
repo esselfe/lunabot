@@ -31,8 +31,10 @@ To compile and run lunabot, you will need the following dependencies installed:
 To compile the source code into an executable, type 'make' in the source directory from a terminal.  
 You will need to put the bot's NickServ password in .passwd and the webhook secret in .secret.  
 Alternatively you can set the credentials using environment variables instead of files:
+
  - LUNABOT_NICKSERV_PASSWORD
  - LUNABOT_WEBHOOK_SECRET
+
 To run the program, type './lunabot'  
 Once you have an identification confirmation from the server, you need to type 'join #channel_name_here'.  
 
