@@ -11,7 +11,7 @@ Lunabot is a simple IRC bot written in the C programming language, designed to r
    - CI build statuses, Failed or Success.
    - Closed PR.
    - Merged PR.
-   - Label operations on PRs.
+   - Label operations on PRs (optional).
  - Listens for GitHub webhook events via an embedded HTTP server.
  - Parses and formats repository events before sending them to the IRC channel.
  - Uses OpenSSL for secure connections.
@@ -30,6 +30,9 @@ To compile and run lunabot, you will need the following dependencies installed:
 ## Build and run
 To compile the source code into an executable, type 'make' in the source directory from a terminal.  
 You will need to put the bot's NickServ password in .passwd and the webhook secret in .secret.  
+Alternatively you can set the credentials using environment variables instead of files:
+ - LUNABOT_NICKSERV_PASSWORD
+ - LUNABOT_WEBHOOK_SECRET
 To run the program, type './lunabot'  
 Once you have an identification confirmation from the server, you need to type 'join #channel_name_here'.  
 
