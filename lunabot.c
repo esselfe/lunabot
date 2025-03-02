@@ -24,7 +24,7 @@
 #define CHANNEL "#lunar"
 #define WEBHOOK_PORT 3000
 
-const char *lunabot_version = "0.1.3";
+const char *lunabot_version = "0.1.4";
 
 unsigned int mainloopend;
 int irc_sock;
@@ -303,7 +303,7 @@ void ParseJsonData(char *json_data) {
 		Log(LOCAL, buffer_log);
 		return;
 	}
-	
+
 	// Process CI build statuses
 	json_t *context = json_object_get(root, "context");
 	if (json_is_string(context)) {
@@ -367,6 +367,7 @@ void ParseJsonData(char *json_data) {
 		SendIrcMessage(message);
 		free(status_str);
 	
+		json_decref(root);
 		return;
 	}
 	
@@ -374,7 +375,45 @@ void ParseJsonData(char *json_data) {
 	json_t *action = json_object_get(root, "action");
 	json_t *pr = json_object_get(root, "pull_request");
 	if (json_is_string(action) && json_is_object(pr)) {
-		if (strcmp(json_string_value(action), "opened") == 0) {
+		if (strcmp(json_string_value(action), "labeled") == 0) {
+			json_t *sender = json_object_get(root, "sender");
+			if (json_is_object(sender)) {
+				json_t *username = json_object_get(sender, "login");
+				json_t *title = json_object_get(pr, "title");
+				json_t *url = json_object_get(pr, "html_url");
+				json_t *label = json_object_get(root, "label");
+				json_t *label_name = json_object_get(label, "name");
+				char message[512];
+				snprintf(message, sizeof(message), 
+						 "[%sLabels%s]: %s added the %s label to '%s' - %s",
+						 LIGHT_GREEN, NORMAL,
+						 json_string_value(username),
+						 json_string_value(label_name),
+						 json_string_value(title), 
+						 json_string_value(url));
+				SendIrcMessage(message);
+			}
+		}
+		else if (strcmp(json_string_value(action), "unlabeled") == 0) {
+			json_t *sender = json_object_get(root, "sender");
+			if (json_is_object(sender)) {
+				json_t *username = json_object_get(sender, "login");
+				json_t *title = json_object_get(pr, "title");
+				json_t *url = json_object_get(pr, "html_url");
+				json_t *label = json_object_get(root, "label");
+				json_t *label_name = json_object_get(label, "name");
+				char message[512];
+				snprintf(message, sizeof(message), 
+						 "[%sLabels%s]: %s removed the %s label to '%s' - %s",
+						 LIGHT_GREEN, NORMAL,
+						 json_string_value(username),
+						 json_string_value(label_name),
+						 json_string_value(title), 
+						 json_string_value(url));
+				SendIrcMessage(message);
+			}
+		}
+		else if (strcmp(json_string_value(action), "opened") == 0) {
 			json_t *title = json_object_get(pr, "title");
 			json_t *user = json_object_get(json_object_get(pr, "user"), "login");
 			json_t *url = json_object_get(pr, "html_url");
