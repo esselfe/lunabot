@@ -24,7 +24,7 @@
 #define CHANNEL "#lunar"
 #define WEBHOOK_PORT 3000
 
-const char *lunabot_version = "0.1.5";
+const char *lunabot_version = "0.1.6";
 
 unsigned int mainloopend;
 int irc_sock;
@@ -34,6 +34,7 @@ SSL *pSSL;
 char buffer[BUFFER_SIZE];
 char buffer_log[BUFFER_SIZE * 4];
 struct MHD_Daemon *httpdaemon;
+unsigned int only_core_labels = 0; // Specific to Lunar-Linux
 unsigned int ignore_labels;
 unsigned int ignore_pending = 1;
 // IRC color codes
@@ -395,6 +396,20 @@ void ParseJsonData(char *json_data) {
 				json_decref(root);
 				return;
 			}
+
+			if (only_core_labels) {
+				json_t *repo = json_object_get(root, "repository");
+				if (json_is_object(repo)) {
+					json_t *repo_name = json_object_get(repo, "name");
+					if (json_is_string(repo_name)) {
+						if (strcmp(json_string_value(repo_name), "moonbase-core") != 0) {
+							json_decref(root);
+							return;
+						}
+					}
+				}
+			}
+
 			json_t *sender = json_object_get(root, "sender");
 			if (json_is_object(sender)) {
 				json_t *username = json_object_get(sender, "login");
@@ -418,6 +433,20 @@ void ParseJsonData(char *json_data) {
 				json_decref(root);
 				return;
 			}
+
+			if (only_core_labels) {
+				json_t *repo = json_object_get(root, "repository");
+				if (json_is_object(repo)) {
+					json_t *repo_name = json_object_get(repo, "name");
+					if (json_is_string(repo_name)) {
+						if (strcmp(json_string_value(repo_name), "moonbase-core") != 0) {
+							json_decref(root);
+							return;
+						}
+					}
+				}
+			}
+
 			json_t *sender = json_object_get(root, "sender");
 			if (json_is_object(sender)) {
 				json_t *username = json_object_get(sender, "login");
