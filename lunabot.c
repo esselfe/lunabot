@@ -243,15 +243,14 @@ void *IrcConnect(void *arg) {
 		if (buffer[bytes-2] == '\r')
 			buffer[bytes-2] = '\0'; // Remove '\r'
 		
-		Log(IN, buffer);
 		
 		// Respond to ping requests with a pong message
 		if (strncmp(buffer, "PING", 4) == 0) {
-			sprintf(buffer_log, "PONG %s", buffer + 5);
-			Log(OUT, buffer_log);
 			sprintf(buffer2, "PONG %s\r\n", buffer + 5);
 			SSL_write(pSSL, buffer2, strlen(buffer2));
 		}
+		else
+			Log(IN, buffer);
 	}
 
 	close(irc_sock);
