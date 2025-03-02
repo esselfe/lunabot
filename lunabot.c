@@ -34,6 +34,7 @@ SSL *pSSL;
 char buffer[BUFFER_SIZE];
 char buffer_log[BUFFER_SIZE * 4];
 struct MHD_Daemon *httpdaemon;
+unsigned int ignore_labels;
 unsigned int ignore_pending = 1;
 // IRC color codes
 #define NORMAL      "\003"   // default/restore
@@ -376,6 +377,10 @@ void ParseJsonData(char *json_data) {
 	json_t *pr = json_object_get(root, "pull_request");
 	if (json_is_string(action) && json_is_object(pr)) {
 		if (strcmp(json_string_value(action), "labeled") == 0) {
+			if (ignore_labels) {
+				json_decref(root);
+				return;
+			}
 			json_t *sender = json_object_get(root, "sender");
 			if (json_is_object(sender)) {
 				json_t *username = json_object_get(sender, "login");
@@ -395,6 +400,10 @@ void ParseJsonData(char *json_data) {
 			}
 		}
 		else if (strcmp(json_string_value(action), "unlabeled") == 0) {
+			if (ignore_labels) {
+				json_decref(root);
+				return;
+			}
 			json_t *sender = json_object_get(root, "sender");
 			if (json_is_object(sender)) {
 				json_t *username = json_object_get(sender, "login");
