@@ -24,7 +24,7 @@
 #define CHANNEL "#lunar"
 #define WEBHOOK_PORT 3000
 
-const char *lunabot_version = "0.1.4";
+const char *lunabot_version = "0.1.5";
 
 unsigned int mainloopend;
 int irc_sock;
@@ -201,21 +201,29 @@ void *IrcConnect(void *arg) {
 	sprintf(buffer, "USER %s 0 * :GitHub PR IRC bot\r\n", NICK);
 	SSL_write(pSSL, buffer, strlen(buffer));
 
-	FILE *fp = fopen(".passwd", "r");
-	if (fp == NULL) {
-		sprintf(buffer_log, "lunabot::IrcConnect() error: Cannot open .passwd: %s", strerror(errno));
-		Log(LOCAL, buffer_log);
-		exit(1);
-	}
-	else {
-		char pass[BUFFER_SIZE - 30];
-		fgets(pass, BUFFER_SIZE - 31, fp);
-		fclose(fp);
-		if (pass[strlen(pass)-1] == '\n')
-			pass[strlen(pass)-1] = '\0';
-		sprintf(buffer, "PRIVMSG NickServ :IDENTIFY %s\r\n", pass);
+	const char *env_pass = getenv("LUNABOT_NICKSERV_PASSWORD");
+	if (env_pass != NULL && strlen(env_pass) > 0) {
+		sprintf(buffer, "PRIVMSG NickServ :IDENTIFY %s\r\n", env_pass);
 		Log(OUT, "PRIVMSG NickServ :IDENTIFY ********");
 		SSL_write(pSSL, buffer, strlen(buffer));
+	}
+	else {
+		FILE *fp = fopen(".passwd", "r");
+		if (fp == NULL) {
+			sprintf(buffer_log, "lunabot::IrcConnect() error: Cannot open .passwd: %s", strerror(errno));
+			Log(LOCAL, buffer_log);
+			exit(1);
+		}
+		else {
+			char pass[BUFFER_SIZE - 30];
+			fgets(pass, BUFFER_SIZE - 31, fp);
+			fclose(fp);
+			if (pass[strlen(pass)-1] == '\n')
+				pass[strlen(pass)-1] = '\0';
+			sprintf(buffer, "PRIVMSG NickServ :IDENTIFY %s\r\n", pass);
+			Log(OUT, "PRIVMSG NickServ :IDENTIFY ********");
+			SSL_write(pSSL, buffer, strlen(buffer));
+		}
 	}
 // Not logged in yet, exposes hostmask, needs to be sent manually in the terminal
 //	sprintf(buffer, "JOIN %s\r\n", CHANNEL);
@@ -254,20 +262,26 @@ void *IrcConnect(void *arg) {
 int VerifySignature(const char *payload, const char *signature) {
 	unsigned int hash_len = 32;
 	unsigned char hash[hash_len];
-	char secret[1024];
+	char *secret = (char *)getenv("LUNABOT_WEBHOOK_SECRET");
 
-	FILE *fp = fopen(".secret", "r");
-	if (fp == NULL) {
-		Log(LOCAL, "lunabot::VerifySignature(): .secret file not found!");
-		exit(1);
-	}
-	else {
-		fgets(secret, 1023, fp);
-		fclose(fp);
+	unsigned int len;
+	if (secret != NULL)
+		len = strlen(secret);
+
+	if (secret == NULL || len == 0) {
+		FILE *fp = fopen(".secret", "r");
+		if (fp == NULL) {
+			Log(LOCAL, "lunabot::VerifySignature(): .secret file not found!");
+			exit(1);
+		}
+		else {
+			fgets(secret, 1023, fp);
+			fclose(fp);
 		
-		// Strip newline ending
-		if (secret[strlen(secret)-1] == '\n')
-			secret[strlen(secret)-1] = '\0';
+			// Strip newline ending
+			if (secret[strlen(secret)-1] == '\n')
+				secret[strlen(secret)-1] = '\0';
+		}
 	}
 
 	HMAC(EVP_sha256(), secret, strlen(secret), (unsigned char*)payload, strlen(payload),
