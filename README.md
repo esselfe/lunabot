@@ -14,7 +14,7 @@ Lunabot is a simple IRC bot written in the C programming language, designed to r
    - Label operations on PRs (optional).
  - Listens for GitHub webhook events via an embedded HTTP server.
  - Parses and formats repository events before sending them to the IRC channel.
- - Uses OpenSSL for secure connections.
+ - Uses OpenSSL for payload signature verifications.
 
 ## Requirements
 
