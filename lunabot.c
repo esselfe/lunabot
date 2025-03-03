@@ -21,7 +21,7 @@
 #define SERVER "irc.libera.chat"
 #define PORT 6697
 #define NICK "lunabot"
-#define CHANNEL "#lunar"
+#define CHANNEL "#lunar-lunabot"
 #define WEBHOOK_PORT 3000
 
 const char *lunabot_version = "0.1.6";
@@ -264,7 +264,7 @@ int VerifySignature(const char *payload, const char *signature) {
 	unsigned char hash[hash_len];
 	char *secret = (char *)getenv("LUNABOT_WEBHOOK_SECRET");
 
-	unsigned int len;
+	unsigned int len = 0;
 	if (secret != NULL)
 		len = strlen(secret);
 
