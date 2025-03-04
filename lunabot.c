@@ -24,8 +24,9 @@
 #define CHANNEL "#lunar-lunabot"
 #define WEBHOOK_PORT 3000
 
-const char *lunabot_version = "0.1.6";
+const char *lunabot_version = "0.1.7";
 
+unsigned int debug = 1;
 unsigned int mainloopend;
 int irc_sock;
 char server_ip[16];
@@ -36,7 +37,7 @@ char buffer_log[BUFFER_SIZE * 4];
 struct MHD_Daemon *httpdaemon;
 unsigned int only_core_labels = 0; // Specific to Lunar-Linux
 unsigned int ignore_labels;
-unsigned int ignore_pending = 1;
+unsigned int ignore_pending = 0;
 // IRC color codes
 #define NORMAL      "\003"   // default/restore
 #define BLACK       "\00301"
@@ -135,7 +136,7 @@ char *GetIP(char *hostname) {
 // Function to send messages to the IRC channel
 void SendIrcMessage(const char *message) {
 	Log(OUT, (char *)message);
-	char buffer_msg[4096];
+	char buffer_msg[BUFFER_SIZE * 16];
 	snprintf(buffer_msg, sizeof(buffer_msg), "PRIVMSG %s :%s\r\n", CHANNEL, message);
 	SSL_write(pSSL, buffer_msg, strlen(buffer_msg));
 }
@@ -227,8 +228,8 @@ void *IrcConnect(void *arg) {
 		}
 	}
 // Not logged in yet, exposes hostmask, needs to be sent manually in the terminal
-//	sprintf(buffer, "JOIN %s\r\n", CHANNEL);
-//	SSL_write(pSSL, buffer, strlen(buffer));
+	sprintf(buffer, "JOIN %s\r\n", CHANNEL);
+	SSL_write(pSSL, buffer, strlen(buffer));
 
 	// Listen for server messages
 	while (1) {
@@ -260,15 +261,25 @@ void *IrcConnect(void *arg) {
 
 // Function to verify the GitHub webhook signature
 int VerifySignature(const char *payload, const char *signature) {
+	if (debug)
+		fprintf(stderr, "VerifySignature() started\n");
+
 	unsigned int hash_len = 32;
 	unsigned char hash[hash_len];
 	char *secret = (char *)getenv("LUNABOT_WEBHOOK_SECRET");
 
-	unsigned int len = 0;
+	unsigned int secret_len = 0;
 	if (secret != NULL)
-		len = strlen(secret);
+		secret_len = strlen(secret);
 
-	if (secret == NULL || len == 0) {
+	if (secret == NULL || secret_len == 0) {
+		secret = malloc(1024);
+		if (secret == NULL) {
+			Log(LOCAL, "lunabot::VerifySignature(): Cannot allocate memory");
+			exit(1);
+		}
+		memset(secret, 0, 1024);
+
 		FILE *fp = fopen(".secret", "r");
 		if (fp == NULL) {
 			Log(LOCAL, "lunabot::VerifySignature(): .secret file not found!");
@@ -309,6 +320,9 @@ int VerifySignature(const char *payload, const char *signature) {
 }
 
 void ParseJsonData(char *json_data) {
+	if (debug)
+		fprintf(stderr, "ParseJsonData() started\n");
+
 	json_t *root;
 	json_error_t error;
 	root = json_loads(json_data, 0, &error);
@@ -418,7 +432,7 @@ void ParseJsonData(char *json_data) {
 				json_t *label_name = json_object_get(label, "name");
 				char message[512];
 				snprintf(message, sizeof(message), 
-						 "[%sLabels%s]: %s added the %s label to '%s' - %s",
+						 "[%sLabels%s]: %s added the '%s' label to '%s' - %s",
 						 LIGHT_GREEN, NORMAL,
 						 json_string_value(username),
 						 json_string_value(label_name),
@@ -455,7 +469,7 @@ void ParseJsonData(char *json_data) {
 				json_t *label_name = json_object_get(label, "name");
 				char message[512];
 				snprintf(message, sizeof(message), 
-						 "[%sLabels%s]: %s removed the %s label to '%s' - %s",
+						 "[%sLabels%s]: %s removed the '%s' label to '%s' - %s",
 						 LIGHT_GREEN, NORMAL,
 						 json_string_value(username),
 						 json_string_value(label_name),
