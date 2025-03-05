@@ -19,27 +19,30 @@
 #include <microhttpd.h>
 #include <jansson.h>
 
-const char *lunabot_version_string = "0.2.0";
+const char *lunabot_version_string = "0.2.1";
 
 static const struct option long_options[] = {
 	{"help", no_argument, NULL, 'h'},
 	{"version", no_argument, NULL, 'V'},
 	{"channel", required_argument, NULL, 'c'},
+	{"debug", no_argument, NULL, 'd'},
 	{"irc-port", required_argument, NULL, 'p'},
 	{"irc-server", required_argument, NULL, 's'},
+	{"log", required_argument, NULL, 'l'},
 	{"nick", required_argument, NULL, 'n'},
 	{"webhook-port", required_argument, NULL, 'w'},
 	{NULL, 0, NULL, 0}
 };
-static const char *short_options = "hVc:n:p:s:w:";
+static const char *short_options = "hVc:dl:n:p:s:w:";
 
 #define DEFAULT_IRC_SERVER   "irc.libera.chat"
 #define DEFAULT_IRC_PORT     6697
 #define DEFAULT_NICK         "lunabot"
 #define DEFAULT_CHANNEL      "#lunar-lunabot"
 #define DEFAULT_WEBHOOK_PORT 3000
+#define DEFAULT_LOG_FILENAME "lunabot.log"
 
-unsigned int debug = 1;
+unsigned int debug;
 unsigned int mainloopend;
 int irc_sock;
 char *irc_server_hostname;
@@ -78,7 +81,8 @@ unsigned int ignore_pending = 0;
 #define LOCAL 0
 #define IN    1
 #define OUT   2
-char *log_filename = "lunabot.log";
+char *log_filename;
+unsigned int disable_logging;
 
 void LunabotHelp(void) {
 printf("lunabot option usage: lunabot { --help/-h | --version/-V |\n"
@@ -109,11 +113,6 @@ void Log(unsigned int direction, char *text) {
 	struct timeval tv0;
 	gettimeofday(&tv0, NULL);
 
-	fprintf(log_fp, "%04d%02d%02d-%02d:%02d:%02d.%06ld %s##%s##\n",
-		tm0->tm_year+1900, tm0->tm_mon+1, tm0->tm_mday,
-		tm0->tm_hour, tm0->tm_min, tm0->tm_sec, tv0.tv_usec,
-		dirstr, text);
-
 	// Show message in console with colors
 	fprintf(stdout, "\033[00;36m%04d%02d%02d-%02d:%02d:%02d.%06ld %s"
 		"##\033[00m%s\033[00;36m##\033[00m\n", 
@@ -121,6 +120,14 @@ void Log(unsigned int direction, char *text) {
 		tm0->tm_hour, tm0->tm_min, tm0->tm_sec, tv0.tv_usec,
 		dirstr, text);
 	
+	if (disable_logging)
+		return;
+
+	fprintf(log_fp, "%04d%02d%02d-%02d:%02d:%02d.%06ld %s##%s##\n",
+		tm0->tm_year+1900, tm0->tm_mon+1, tm0->tm_mday,
+		tm0->tm_hour, tm0->tm_min, tm0->tm_sec, tv0.tv_usec,
+		dirstr, text);
+
 	fclose(log_fp);
 }
 
@@ -285,6 +292,16 @@ void *IrcConnect(void *arg) {
 	close(irc_sock);
 	exit(0);
 	return NULL;
+}
+
+void IrcConnectStart(void) {
+	pthread_t irc_thread;
+	pthread_attr_t attr;
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+	pthread_create(&irc_thread, &attr, IrcConnect, NULL);
+	pthread_detach(irc_thread);
+	pthread_attr_destroy(&attr);
 }
 
 // Function to verify the GitHub webhook signature
@@ -694,6 +711,18 @@ void ParseArgs(int *argc, char **argv) {
 				channel = strdup(optarg);
 
 			break;
+		case 'd':
+			debug = 1;
+			break;
+		case 'l': // --log
+			if (optarg != NULL && strlen(optarg)) {
+				if (strcmp(optarg, "off") == 0)
+					disable_logging = 1;
+				else
+					log_filename = strdup(optarg);
+			}
+
+			break;
 		case 'n': // --nick
 			if (optarg != NULL && strlen(optarg))
 				nick = strdup(optarg);
@@ -741,15 +770,12 @@ int main(int argc, char **argv) {
 	if (!channel)
 		channel = strdup(DEFAULT_CHANNEL);
 
+	if (!log_filename)
+		log_filename = strdup(DEFAULT_LOG_FILENAME);
+
 	WebhookServerStart();
 
-	pthread_t irc_thread;
-	pthread_attr_t attr;
-	pthread_attr_init(&attr);
-	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-	pthread_create(&irc_thread, &attr, IrcConnect, NULL);
-	pthread_detach(irc_thread);
-	pthread_attr_destroy(&attr);
+	IrcConnectStart();
 
 	// Start reading user input from the terminal and process per-line
 	char buffer_line[BUFFER_SIZE];
