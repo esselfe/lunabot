@@ -91,13 +91,6 @@ printf("lunabot option usage: lunabot { --help/-h | --version/-V |\n"
 }
 
 void Log(unsigned int direction, char *text) {
-	FILE *log_fp = fopen(log_filename, "a+");
-	if (log_fp == NULL) {
-		fprintf(stderr, "lunabot::Log() error: Cannot open '%s': %s\n",
-			log_filename, strerror(errno));
-		exit(1);
-	}
-
 	char *dirstr;
 	if (direction == LOCAL)
 		dirstr = "||";
@@ -123,6 +116,13 @@ void Log(unsigned int direction, char *text) {
 	if (disable_logging)
 		return;
 
+	FILE *log_fp = fopen(log_filename, "a+");
+	if (log_fp == NULL) {
+		fprintf(stderr, "lunabot::Log() error: Cannot open '%s': %s\n",
+			log_filename, strerror(errno));
+		exit(1);
+	}
+	
 	fprintf(log_fp, "%04d%02d%02d-%02d:%02d:%02d.%06ld %s##%s##\n",
 		tm0->tm_year+1900, tm0->tm_mon+1, tm0->tm_mday,
 		tm0->tm_hour, tm0->tm_min, tm0->tm_sec, tv0.tv_usec,
