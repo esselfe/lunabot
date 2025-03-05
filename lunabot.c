@@ -15,21 +15,39 @@
 #include <openssl/evp.h>
 #include <openssl/ssl.h>
 #include <pthread.h>
+#include <getopt.h>
 #include <microhttpd.h>
 #include <jansson.h>
 
-#define SERVER "irc.libera.chat"
-#define PORT 6697
-#define NICK "lunabot"
-#define CHANNEL "#lunar-lunabot"
-#define WEBHOOK_PORT 3000
+const char *lunabot_version_string = "0.2.0";
 
-const char *lunabot_version = "0.1.7";
+static const struct option long_options[] = {
+	{"help", no_argument, NULL, 'h'},
+	{"version", no_argument, NULL, 'V'},
+	{"channel", required_argument, NULL, 'c'},
+	{"irc-port", required_argument, NULL, 'p'},
+	{"irc-server", required_argument, NULL, 's'},
+	{"nick", required_argument, NULL, 'n'},
+	{"webhook-port", required_argument, NULL, 'w'},
+	{NULL, 0, NULL, 0}
+};
+static const char *short_options = "hVc:n:p:s:w:";
+
+#define DEFAULT_IRC_SERVER   "irc.libera.chat"
+#define DEFAULT_IRC_PORT     6697
+#define DEFAULT_NICK         "lunabot"
+#define DEFAULT_CHANNEL      "#lunar-lunabot"
+#define DEFAULT_WEBHOOK_PORT 3000
 
 unsigned int debug = 1;
 unsigned int mainloopend;
 int irc_sock;
-char server_ip[16];
+char *irc_server_hostname;
+char irc_server_ip[16];
+unsigned int irc_server_port;
+unsigned int webhook_port;
+char *nick;
+char *channel;
 SSL *pSSL;
 #define BUFFER_SIZE 1024
 char buffer[BUFFER_SIZE];
@@ -61,6 +79,12 @@ unsigned int ignore_pending = 0;
 #define IN    1
 #define OUT   2
 char *log_filename = "lunabot.log";
+
+void LunabotHelp(void) {
+printf("lunabot option usage: lunabot { --help/-h | --version/-V |\n"
+	"\t--channel/-c NAME | --nick/-n NAME | --irc-port/-p NUMBER |\n"
+	"\t--irc-server/-s HOSTNAME | --webhook-port/-w NUMBER }\n");
+}
 
 void Log(unsigned int direction, char *text) {
 	FILE *log_fp = fopen(log_filename, "a+");
@@ -110,7 +134,8 @@ char *GetIP(char *hostname) {
 	hints.ai_socktype = SOCK_STREAM;
 
 	if ((status = getaddrinfo(hostname, NULL, &hints, &res)) != 0) {
-		sprintf(buffer_log, "lunabot::GetIP() error: getaddrinfo() failed: %s", gai_strerror(status));
+		sprintf(buffer_log, "lunabot::GetIP() error: getaddrinfo() failed: %s",
+			gai_strerror(status));
 		Log(LOCAL, buffer_log);
 		return NULL;
 	}
@@ -120,9 +145,9 @@ char *GetIP(char *hostname) {
 		if (p->ai_family == AF_INET) { // IPv4
 			struct sockaddr_in *ipv4 = (struct sockaddr_in *)p->ai_addr;
 			addr = &(ipv4->sin_addr);
-			inet_ntop(p->ai_family, addr, server_ip, sizeof(server_ip));
+			inet_ntop(p->ai_family, addr, irc_server_ip, sizeof(irc_server_ip));
 			freeaddrinfo(res); // Cleanup
-			return server_ip;
+			return irc_server_ip;
 		}
 		else
 			continue;
@@ -137,7 +162,8 @@ char *GetIP(char *hostname) {
 void SendIrcMessage(const char *message) {
 	Log(OUT, (char *)message);
 	char buffer_msg[BUFFER_SIZE * 16];
-	snprintf(buffer_msg, sizeof(buffer_msg), "PRIVMSG %s :%s\r\n", CHANNEL, message);
+	snprintf(buffer_msg, sizeof(buffer_msg), "PRIVMSG %s :%s\r\n",
+		channel, message);
 	SSL_write(pSSL, buffer_msg, strlen(buffer_msg));
 }
 
@@ -148,26 +174,29 @@ void *IrcConnect(void *arg) {
 	// Create socket
 	irc_sock = socket(AF_INET, SOCK_STREAM, 0);
 	if (irc_sock < 0) {
-		sprintf(buffer_log, "lunabot::IrcConnect() error: socket() failed: %s", strerror(errno));
+		sprintf(buffer_log, "lunabot::IrcConnect() error: socket() failed: %s",
+			strerror(errno));
 		Log(LOCAL, buffer_log);
 		exit(1);
 	}
 
-	char *ret = GetIP(SERVER);
+	char *ret = GetIP(irc_server_hostname);
 	if (ret == NULL) {
-		sprintf(buffer_log, "lunabot::IrcConnect() error: Cannot get an IP for '%s'", SERVER);
+		sprintf(buffer_log, "lunabot::IrcConnect() error: Cannot get an IP for '%s'",
+			irc_server_hostname);
 		Log(LOCAL, buffer_log);
 		close(irc_sock);
 		exit(1);
 	}
 
 	server_addr.sin_family = AF_INET;
-	server_addr.sin_port = htons(PORT);
-	server_addr.sin_addr.s_addr = inet_addr(server_ip);
+	server_addr.sin_port = htons(irc_server_port);
+	server_addr.sin_addr.s_addr = inet_addr(irc_server_ip);
 
 	// Connect to IRC server
 	if (connect(irc_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-		sprintf(buffer_log, "lunabot::IrcConnect() error: connect() failed: %s", strerror(errno));
+		sprintf(buffer_log, "lunabot::IrcConnect() error: connect() failed: %s",
+			strerror(errno));
 		Log(LOCAL, buffer_log);
 		close(irc_sock);
 		exit(1);
@@ -193,14 +222,14 @@ void *IrcConnect(void *arg) {
 
 	BIO *bio = BIO_new_socket(irc_sock, BIO_CLOSE);
 	SSL_set_bio(pSSL, bio, bio);
-	SSL_set1_host(pSSL, SERVER);
+	SSL_set1_host(pSSL, irc_server_hostname);
 	SSL_connect(pSSL);
 
 	// Send basic IRC commands
-	sprintf(buffer, "NICK %s\r\n", NICK);
+	sprintf(buffer, "NICK %s\r\n", nick);
 	SSL_write(pSSL, buffer, strlen(buffer));
 
-	sprintf(buffer, "USER %s 0 * :GitHub PR IRC bot\r\n", NICK);
+	sprintf(buffer, "USER %s 0 * :IRC bot for Github webhooks\r\n", nick);
 	SSL_write(pSSL, buffer, strlen(buffer));
 
 	const char *env_pass = getenv("LUNABOT_NICKSERV_PASSWORD");
@@ -216,19 +245,18 @@ void *IrcConnect(void *arg) {
 			Log(LOCAL, buffer_log);
 			exit(1);
 		}
-		else {
-			char pass[BUFFER_SIZE - 30];
-			fgets(pass, BUFFER_SIZE - 31, fp);
-			fclose(fp);
-			if (pass[strlen(pass)-1] == '\n')
-				pass[strlen(pass)-1] = '\0';
-			sprintf(buffer, "PRIVMSG NickServ :IDENTIFY %s\r\n", pass);
-			Log(OUT, "PRIVMSG NickServ :IDENTIFY ********");
-			SSL_write(pSSL, buffer, strlen(buffer));
-		}
+
+		char pass[BUFFER_SIZE - 30];
+		fgets(pass, BUFFER_SIZE - 31, fp);
+		fclose(fp);
+		if (pass[strlen(pass)-1] == '\n')
+			pass[strlen(pass)-1] = '\0';
+		sprintf(buffer, "PRIVMSG NickServ :IDENTIFY %s\r\n", pass);
+		Log(OUT, "PRIVMSG NickServ :IDENTIFY ********");
+		SSL_write(pSSL, buffer, strlen(buffer));
 	}
 // Not logged in yet, exposes hostmask, needs to be sent manually in the terminal
-	sprintf(buffer, "JOIN %s\r\n", CHANNEL);
+	sprintf(buffer, "JOIN %s\r\n", channel);
 	SSL_write(pSSL, buffer, strlen(buffer));
 
 	// Listen for server messages
@@ -240,9 +268,9 @@ void *IrcConnect(void *arg) {
 			break;
 
 		if (buffer[bytes-1] == '\n')
-			buffer[bytes-1] = '\0';   // Remove '\n'
+			buffer[bytes-1] = '\0'; // Remove ending '\n'
 		if (buffer[bytes-2] == '\r')
-			buffer[bytes-2] = '\0'; // Remove '\r'
+			buffer[bytes-2] = '\0'; // Remove ending '\r'
 		
 		
 		// Respond to ping requests with a pong message
@@ -273,12 +301,12 @@ int VerifySignature(const char *payload, const char *signature) {
 		secret_len = strlen(secret);
 
 	if (secret == NULL || secret_len == 0) {
-		secret = malloc(1024);
+		secret = malloc(BUFFER_SIZE);
 		if (secret == NULL) {
 			Log(LOCAL, "lunabot::VerifySignature(): Cannot allocate memory");
 			exit(1);
 		}
-		memset(secret, 0, 1024);
+		memset(secret, 0, BUFFER_SIZE);
 
 		FILE *fp = fopen(".secret", "r");
 		if (fp == NULL) {
@@ -286,7 +314,7 @@ int VerifySignature(const char *payload, const char *signature) {
 			exit(1);
 		}
 		else {
-			fgets(secret, 1023, fp);
+			fgets(secret, BUFFER_SIZE - 1, fp);
 			fclose(fp);
 		
 			// Strip newline ending
@@ -415,7 +443,8 @@ void ParseJsonData(char *json_data) {
 				if (json_is_object(repo)) {
 					json_t *repo_name = json_object_get(repo, "name");
 					if (json_is_string(repo_name)) {
-						if (strcmp(json_string_value(repo_name), "moonbase-core") != 0) {
+						if (strcmp(json_string_value(repo_name),
+						  "moonbase-core") != 0) {
 							json_decref(root);
 							return;
 						}
@@ -452,7 +481,8 @@ void ParseJsonData(char *json_data) {
 				if (json_is_object(repo)) {
 					json_t *repo_name = json_object_get(repo, "name");
 					if (json_is_string(repo_name)) {
-						if (strcmp(json_string_value(repo_name), "moonbase-core") != 0) {
+						if (strcmp(json_string_value(repo_name),
+						  "moonbase-core") != 0) {
 							json_decref(root);
 							return;
 						}
@@ -631,20 +661,86 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 
 // Webhook server thread
 void WebhookServerStart(void) {
-	httpdaemon = MHD_start_daemon(MHD_USE_SELECT_INTERNALLY, WEBHOOK_PORT, NULL, NULL,
+	httpdaemon = MHD_start_daemon(MHD_USE_SELECT_INTERNALLY, webhook_port, NULL, NULL,
 							  &WebhookCallback, NULL, MHD_OPTION_END);
 	if (!httpdaemon) {
 		Log(LOCAL, "lunabot::WebhookServerStart(): Failed to start HTTP server");
 		exit(1);
 	}
 	else {
-		sprintf(buffer_log, "Webhook server running on port %d", WEBHOOK_PORT);
+		sprintf(buffer_log, "Webhook server running on port %d", webhook_port);
 		Log(LOCAL, buffer_log);
 	}
 }
 
+void ParseArgs(int *argc, char **argv) {
+	int c;
+	while (1) {
+		c = getopt_long(*argc, argv, short_options, long_options, NULL);
+		if (c == -1)
+			break;
+
+		switch (c) {
+		case 'h': // --help
+			LunabotHelp();
+			exit(0);
+			break;
+		case 'V': // --version
+			printf("lunabot %s\n", lunabot_version_string);
+			exit(0);
+			break;
+		case 'c': // --channel
+			if (optarg != NULL && strlen(optarg))
+				channel = strdup(optarg);
+
+			break;
+		case 'n': // --nick
+			if (optarg != NULL && strlen(optarg))
+				nick = strdup(optarg);
+
+			break;
+		case 'p': // --irc-port
+			if (optarg != NULL && strlen(optarg))
+				irc_server_port = (unsigned int)atoi(optarg);
+
+			break;
+		case 's': // --irc-server
+			if (optarg != NULL && strlen(optarg))
+				irc_server_hostname = strdup(optarg);
+
+			break;
+		case 'w': // --webhook-port
+			if (optarg != NULL && strlen(optarg))
+				webhook_port = (unsigned int)atoi(optarg);
+
+			break;
+		default:
+			fprintf(stderr, "lunabot::ParseArgs() warning: Unknown "
+				"option: %d (%c)\n", c, (char)c);
+			break;
+		}
+	}
+}
+
 // Program entry point
-int main() {
+int main(int argc, char **argv) {
+	ParseArgs(&argc, argv);
+
+	if (!irc_server_hostname)
+		irc_server_hostname = strdup(DEFAULT_IRC_SERVER);
+
+	if (!irc_server_port)
+		irc_server_port = DEFAULT_IRC_PORT;
+		
+	if (!webhook_port)
+		webhook_port = DEFAULT_WEBHOOK_PORT;
+
+	if (!nick)
+		nick = strdup(DEFAULT_NICK);
+
+	if (!channel)
+		channel = strdup(DEFAULT_CHANNEL);
+
 	WebhookServerStart();
 
 	pthread_t irc_thread;
