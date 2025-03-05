@@ -85,9 +85,10 @@ char *log_filename;
 unsigned int disable_logging;
 
 void LunabotHelp(void) {
-printf("lunabot option usage: lunabot { --help/-h | --version/-V |\n"
+printf("lunabot option usage: lunabot --help/-h | --version/-V | --debug/-d |\n"
 	"\t--channel/-c NAME | --nick/-n NAME | --irc-port/-p NUMBER |\n"
-	"\t--irc-server/-s HOSTNAME | --webhook-port/-w NUMBER }\n");
+	"\t--irc-server/-s HOSTNAME | --log/-l FILENAME, off | \n"
+	"\t--webhook-port/-w NUMBER\n");
 }
 
 void Log(unsigned int direction, char *text) {
