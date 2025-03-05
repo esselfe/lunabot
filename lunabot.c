@@ -579,7 +579,7 @@ static enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connect
 				data, MHD_RESPMEM_PERSISTENT);
 		int ret = MHD_queue_response(connection, 401, response401);
 		MHD_destroy_response(response401);
-		Log(LOCAL, "Webhook signature verification failed!");
+		Log(LOCAL, "Webhook signature missing from the HTTP header!");
 		return ret;
 	}
 
