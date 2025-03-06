@@ -418,8 +418,14 @@ int main(int argc, char **argv) {
 			globals.mainloopend = 1;
 			Log(LOCAL, "lunabot exited");
 		}
-		else if (strncmp(buffer_line, "reload", 6) == 0)
+		else if (strncmp(buffer_line, "reload", 6) == 0) {
+			if (globals.httpdaemon != NULL)
+				MHD_stop_daemon(globals.httpdaemon);
+
 			ReloadLibrary();
+
+			WebhookServerStart();
+		}
 		else if (strlen(buffer_line) > 0 && *buffer_line != '\n') {
 			Log(OUT, buffer_line);
 			// Send to server, this is a raw message!
