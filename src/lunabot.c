@@ -1,0 +1,436 @@
+/* IRC bot for Github webhook notifications
+   Copyrighted Stephane Fontaine 2025 under GPLv3
+*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <errno.h>
+#include <time.h>
+#include <sys/time.h>
+#include <dlfcn.h>
+#include <netdb.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <openssl/hmac.h>
+#include <openssl/evp.h>
+#include <openssl/ssl.h>
+#include <pthread.h>
+#include <getopt.h>
+#include <microhttpd.h>
+#include <jansson.h>
+
+#include "lunabot.h"
+
+const char *lunabot_version_string = "0.3.0";
+
+struct GlobalVariables globals, **globals_ptr;
+char buffer[BUFFER_SIZE];
+char buffer_log[BUFFER_SIZE * 4];
+
+static const struct option long_options[] = {
+	{"help", no_argument, NULL, 'h'},
+	{"version", no_argument, NULL, 'V'},
+	{"channel", required_argument, NULL, 'c'},
+	{"debug", no_argument, NULL, 'd'},
+	{"irc-port", required_argument, NULL, 'p'},
+	{"irc-server", required_argument, NULL, 's'},
+	{"log", required_argument, NULL, 'l'},
+	{"nick", required_argument, NULL, 'n'},
+	{"webhook-port", required_argument, NULL, 'w'},
+	{NULL, 0, NULL, 0}
+};
+static const char *short_options = "hVc:dl:n:p:s:w:";
+
+void LunabotHelp(void) {
+printf("lunabot option usage: lunabot --help/-h | --version/-V | --debug/-d |\n"
+	"\t--channel/-c NAME | --nick/-n NAME | --irc-port/-p NUMBER |\n"
+	"\t--irc-server/-s HOSTNAME | --log/-l FILENAME, off | \n"
+	"\t--webhook-port/-w NUMBER\n");
+}
+
+void *handle;
+void (*Log)(unsigned int direction, char *text);
+void (*ParseJsonData)(char *json_data);
+void (*SendIrcMessage)(const char *message);
+int (*VerifySignature)(const char *payload, const char *signature);
+enum MHD_Result (*WebhookCallback)(void *cls, struct MHD_Connection *connection, 
+		const char *url, const char *method, 
+		const char *version, const char *upload_data,
+		unsigned long *upload_data_size, void **ptr);
+
+void ReloadLibrary(void) {
+	if (handle != NULL)
+		dlclose(handle);
+
+	handle = dlopen("./liblunabot.so", RTLD_LAZY);
+	if (handle == NULL) {
+		fprintf(stderr,
+			"lunabot::ReloadLibrary() error: Cannot load liblunabot.so: %s\n",
+			dlerror());
+		exit(1);
+	}
+	
+	globals_ptr = (struct GlobalVariables **)dlsym(handle, "libglobals");
+	if (globals_ptr == NULL) {
+		fprintf(stderr,
+			"lunabot::ReloadLibrary() error: Cannot find libglobals: %s\n",
+			dlerror());
+		dlclose(handle);
+		exit(1);
+	}
+	*globals_ptr = &globals;
+	
+	*(void **)(&Log) = dlsym(handle, "Log_func");
+	if (Log == NULL) {
+		fprintf(stderr,
+			"lunabot::ReloadLibrary() error: Cannot load Log(): %s\n",
+			dlerror());
+		dlclose(handle);
+		exit(1);
+	}
+	
+	*(void **)(&ParseJsonData) = dlsym(handle, "ParseJsonData_func");
+	if (ParseJsonData == NULL) {
+		fprintf(stderr,
+			"lunabot::ReloadLibrary() error: Cannot load ParseJsonData(): %s\n",
+			dlerror());
+		dlclose(handle);
+		exit(1);
+	}
+	
+	*(void **)(&SendIrcMessage) = dlsym(handle, "SendIrcMessage_func");
+	if (SendIrcMessage == NULL) {
+		fprintf(stderr,
+			"lunabot::ReloadLibrary() error: Cannot load SendIrcMessage(): %s\n",
+			dlerror());
+		dlclose(handle);
+		exit(1);
+	}
+	
+	*(void **)(&VerifySignature) = dlsym(handle, "VerifySignature_func");
+	if (VerifySignature == NULL) {
+		fprintf(stderr,
+			"lunabot::ReloadLibrary() error: Cannot load VerifySignature(): %s\n",
+			dlerror());
+		dlclose(handle);
+		exit(1);
+	}
+	
+	*(void **)(&WebhookCallback) = dlsym(handle, "WebhookCallback_func");
+	if (WebhookCallback == NULL) {
+		fprintf(stderr,
+			"lunabot::ReloadLibrary() error: Cannot load WebhookCallback(): %s\n",
+			dlerror());
+		dlclose(handle);
+		exit(1);
+	}
+}
+
+char *GetIP(char *hostname) {
+	struct addrinfo hints, *res, *p;
+	int status;
+	void *addr;
+	
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_INET; // Use AF_INET for IPv4, AF_INET6 for IPv6, or AF_UNSPEC for both
+	hints.ai_socktype = SOCK_STREAM;
+
+	if ((status = getaddrinfo(hostname, NULL, &hints, &res)) != 0) {
+		sprintf(buffer_log, "lunabot::GetIP() error: getaddrinfo() failed: %s",
+			gai_strerror(status));
+		Log(LOCAL, buffer_log);
+		return NULL;
+	}
+
+	// Loop through results and pick the first one
+	for (p = res; p != NULL; p = p->ai_next) {
+		if (p->ai_family == AF_INET) { // IPv4
+			struct sockaddr_in *ipv4 = (struct sockaddr_in *)p->ai_addr;
+			addr = &(ipv4->sin_addr);
+			inet_ntop(p->ai_family, addr, globals.irc_server_ip,
+				sizeof(globals.irc_server_ip));
+			freeaddrinfo(res); // Cleanup
+			return globals.irc_server_ip;
+		}
+		else
+			continue;
+	}
+
+	freeaddrinfo(res);
+	return NULL; // No IP found
+
+}
+
+// IRC connection thread
+void *IrcConnect(void *arg) {
+	struct sockaddr_in server_addr;
+
+	// Create socket
+	globals.irc_sock = socket(AF_INET, SOCK_STREAM, 0);
+	if (globals.irc_sock < 0) {
+		sprintf(buffer_log, "lunabot::IrcConnect() error: socket() failed: %s",
+			strerror(errno));
+		Log(LOCAL, buffer_log);
+		exit(1);
+	}
+
+	char *ret = GetIP(globals.irc_server_hostname);
+	if (ret == NULL) {
+		sprintf(buffer_log, "lunabot::IrcConnect() error: Cannot get an IP for '%s'",
+			globals.irc_server_hostname);
+		Log(LOCAL, buffer_log);
+		close(globals.irc_sock);
+		exit(1);
+	}
+
+	server_addr.sin_family = AF_INET;
+	server_addr.sin_port = htons(globals.irc_server_port);
+	server_addr.sin_addr.s_addr = inet_addr(globals.irc_server_ip);
+
+	// Connect to IRC server
+	if (connect(globals.irc_sock, (struct sockaddr *)&server_addr,
+	  sizeof(server_addr)) < 0) {
+		sprintf(buffer_log, "lunabot::IrcConnect() error: connect() failed: %s",
+			strerror(errno));
+		Log(LOCAL, buffer_log);
+		close(globals.irc_sock);
+		exit(1);
+	}
+
+	// Setup TLS with the new connection
+	SSL_load_error_strings();
+	SSL_library_init();
+	OpenSSL_add_all_algorithms();
+
+	const SSL_METHOD *method = TLS_method();
+	SSL_CTX *ctx = SSL_CTX_new(method);
+	if (!ctx) {
+		Log(LOCAL, "lunabot::IrcConnect() error: Cannot create SSL context");
+		close(globals.irc_sock);
+		exit(1);
+	}
+	SSL_CTX_set_options(ctx, SSL_OP_NO_COMPRESSION);
+	SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+
+	globals.pSSL = SSL_new(ctx);
+	SSL_set_options(globals.pSSL, SSL_OP_NO_COMPRESSION);
+
+	BIO *bio = BIO_new_socket(globals.irc_sock, BIO_CLOSE);
+	SSL_set_bio(globals.pSSL, bio, bio);
+	SSL_set1_host(globals.pSSL, globals.irc_server_hostname);
+	SSL_connect(globals.pSSL);
+
+	// Send basic IRC commands
+	sprintf(buffer, "NICK %s\r\n", globals.nick);
+	SSL_write(globals.pSSL, buffer, strlen(buffer));
+
+	sprintf(buffer, "USER %s 0 * :IRC bot for Github webhooks\r\n",
+		globals.nick);
+	SSL_write(globals.pSSL, buffer, strlen(buffer));
+
+	const char *env_pass = getenv("LUNABOT_NICKSERV_PASSWORD");
+	if (env_pass != NULL && strlen(env_pass) > 0) {
+		sprintf(buffer, "PRIVMSG NickServ :IDENTIFY %s\r\n", env_pass);
+		Log(OUT, "PRIVMSG NickServ :IDENTIFY ********");
+		SSL_write(globals.pSSL, buffer, strlen(buffer));
+	}
+	else {
+		FILE *fp = fopen(".passwd", "r");
+		if (fp == NULL) {
+			sprintf(buffer_log, "lunabot::IrcConnect() error: Cannot open .passwd: %s", strerror(errno));
+			Log(LOCAL, buffer_log);
+			exit(1);
+		}
+
+		char pass[BUFFER_SIZE - 30];
+		fgets(pass, BUFFER_SIZE - 31, fp);
+		fclose(fp);
+		if (pass[strlen(pass)-1] == '\n')
+			pass[strlen(pass)-1] = '\0';
+		sprintf(buffer, "PRIVMSG NickServ :IDENTIFY %s\r\n", pass);
+		Log(OUT, "PRIVMSG NickServ :IDENTIFY ********");
+		SSL_write(globals.pSSL, buffer, strlen(buffer));
+	}
+// Not logged in yet, exposes hostmask, needs to be sent manually in the terminal
+	sprintf(buffer, "JOIN %s\r\n", globals.channel);
+	SSL_write(globals.pSSL, buffer, strlen(buffer));
+
+	// Listen for server messages
+	while (1) {
+		char buffer2[BUFFER_SIZE*2];
+		memset(buffer, 0, BUFFER_SIZE);
+		int bytes = SSL_read(globals.pSSL, buffer, BUFFER_SIZE - 1);
+		if (bytes <= 0)
+			break;
+
+		if (buffer[bytes-1] == '\n')
+			buffer[bytes-1] = '\0'; // Remove ending '\n'
+		if (buffer[bytes-2] == '\r')
+			buffer[bytes-2] = '\0'; // Remove ending '\r'
+		
+		
+		// Respond to ping requests with a pong message
+		if (strncmp(buffer, "PING", 4) == 0) {
+			sprintf(buffer2, "PONG %s\r\n", buffer + 5);
+			SSL_write(globals.pSSL, buffer2, strlen(buffer2));
+		}
+		else
+			Log(IN, buffer);
+	}
+
+	close(globals.irc_sock);
+	exit(0);
+	return NULL;
+}
+
+void IrcConnectStart(void) {
+	pthread_t irc_thread;
+	pthread_attr_t attr;
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+	pthread_create(&irc_thread, &attr, IrcConnect, NULL);
+	pthread_detach(irc_thread);
+	pthread_attr_destroy(&attr);
+}
+
+// Webhook server thread
+void WebhookServerStart(void) {
+	globals.httpdaemon = MHD_start_daemon(MHD_USE_SELECT_INTERNALLY,
+				globals.webhook_port, NULL, NULL,
+				WebhookCallback, NULL, MHD_OPTION_END);
+	if (!globals.httpdaemon) {
+		Log(LOCAL, "lunabot::WebhookServerStart(): Failed to start HTTP server");
+		exit(1);
+	}
+	else {
+		sprintf(buffer_log, "Webhook server running on port %d",
+			globals.webhook_port);
+		Log(LOCAL, buffer_log);
+	}
+}
+
+void ParseArgs(int *argc, char **argv) {
+	int c;
+	while (1) {
+		c = getopt_long(*argc, argv, short_options, long_options, NULL);
+		if (c == -1)
+			break;
+
+		switch (c) {
+		case 'h': // --help
+			LunabotHelp();
+			exit(0);
+			break;
+		case 'V': // --version
+			printf("lunabot %s\n", lunabot_version_string);
+			exit(0);
+			break;
+		case 'c': // --channel
+			if (optarg != NULL && strlen(optarg))
+				globals.channel = strdup(optarg);
+
+			break;
+		case 'd':
+			globals.debug = 1;
+			break;
+		case 'l': // --log
+			if (optarg != NULL && strlen(optarg)) {
+				if (strcmp(optarg, "off") == 0)
+					globals.disable_logging = 1;
+				else
+					globals.log_filename = strdup(optarg);
+			}
+
+			break;
+		case 'n': // --nick
+			if (optarg != NULL && strlen(optarg))
+				globals.nick = strdup(optarg);
+
+			break;
+		case 'p': // --irc-port
+			if (optarg != NULL && strlen(optarg))
+				globals.irc_server_port = (unsigned int)atoi(optarg);
+
+			break;
+		case 's': // --irc-server
+			if (optarg != NULL && strlen(optarg))
+				globals.irc_server_hostname = strdup(optarg);
+
+			break;
+		case 'w': // --webhook-port
+			if (optarg != NULL && strlen(optarg))
+				globals.webhook_port = (unsigned int)atoi(optarg);
+
+			break;
+		default:
+			fprintf(stderr, "lunabot::ParseArgs() warning: Unknown "
+				"option: %d (%c)\n", c, (char)c);
+			break;
+		}
+	}
+}
+
+// Program entry point
+int main(int argc, char **argv) {
+	ReloadLibrary();
+
+	ParseArgs(&argc, argv);
+
+	if (!globals.irc_server_hostname)
+		globals.irc_server_hostname = strdup(DEFAULT_IRC_SERVER);
+
+	if (!globals.irc_server_port)
+		globals.irc_server_port = DEFAULT_IRC_PORT;
+		
+	if (!globals.webhook_port)
+		globals.webhook_port = DEFAULT_WEBHOOK_PORT;
+
+	if (!globals.nick)
+		globals.nick = strdup(DEFAULT_NICK);
+
+	if (!globals.channel)
+		globals.channel = strdup(DEFAULT_CHANNEL);
+
+	if (!globals.log_filename)
+		globals.log_filename = strdup(DEFAULT_LOG_FILENAME);
+	
+	globals.ignore_pending = 1;
+
+	WebhookServerStart();
+
+	IrcConnectStart();
+
+	// Start reading user input from the terminal and process per-line
+	char buffer_line[BUFFER_SIZE];
+	while(!globals.mainloopend) {
+		memset(buffer_line, 0, BUFFER_SIZE);
+		char *ret = fgets(buffer_line, BUFFER_SIZE - 3, stdin);
+		if (ret == NULL)
+			continue;
+		else {
+			if (buffer_line[strlen(buffer_line) - 1] == '\n')
+				buffer_line[strlen(buffer_line) - 1] = '\0';
+		}
+
+		if (strncmp(buffer_line, "exit", 4) == 0 || strcmp(buffer_line, "quit") == 0 ||
+		  strncmp(buffer_line, "qw", 2) == 0) {
+			globals.mainloopend = 1;
+			Log(LOCAL, "lunabot exited");
+		}
+		else if (strncmp(buffer_line, "reload", 6) == 0)
+			ReloadLibrary();
+		else if (strlen(buffer_line) > 0 && *buffer_line != '\n') {
+			Log(OUT, buffer_line);
+			// Send to server, this is a raw message!
+			char buffer2[BUFFER_SIZE * 2];
+			memset(buffer2, 0, BUFFER_SIZE * 2);
+			sprintf(buffer2, "%s\r\n", buffer_line);
+			SSL_write(globals.pSSL, buffer2, strlen(buffer2));
+		}
+	}
+
+	MHD_stop_daemon(globals.httpdaemon);
+	return 0;
+}
+
