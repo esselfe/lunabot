@@ -19,7 +19,7 @@
 #include <microhttpd.h>
 #include <jansson.h>
 
-const char *lunabot_version_string = "0.2.1";
+const char *lunabot_version_string = "0.2.2";
 
 static const struct option long_options[] = {
 	{"help", no_argument, NULL, 'h'},
@@ -58,7 +58,9 @@ char buffer_log[BUFFER_SIZE * 4];
 struct MHD_Daemon *httpdaemon;
 unsigned int only_core_labels = 0; // Specific to Lunar-Linux
 unsigned int ignore_labels;
-unsigned int ignore_pending = 0;
+unsigned int ignore_pending = 1;
+unsigned int ignore_commits = 0;
+
 // IRC color codes
 #define NORMAL      "\003"   // default/restore
 #define BLACK       "\00301"
@@ -486,6 +488,8 @@ void ParseJsonData(char *json_data) {
 						 json_string_value(title), 
 						 json_string_value(url));
 				SendIrcMessage(message);
+				json_decref(root);
+				return;
 			}
 		}
 		else if (strcmp(json_string_value(action), "unlabeled") == 0) {
@@ -524,6 +528,8 @@ void ParseJsonData(char *json_data) {
 						 json_string_value(title), 
 						 json_string_value(url));
 				SendIrcMessage(message);
+				json_decref(root);
+				return;
 			}
 		}
 		else if (strcmp(json_string_value(action), "opened") == 0) {
@@ -540,6 +546,8 @@ void ParseJsonData(char *json_data) {
 						 json_string_value(user), 
 						 json_string_value(url));
 				SendIrcMessage(message);
+				json_decref(root);
+				return;
 			}
 		}
 		else if (strcmp(json_string_value(action), "closed") == 0) {
@@ -557,6 +565,8 @@ void ParseJsonData(char *json_data) {
 						json_string_value(user),
 						json_string_value(url));
 					SendIrcMessage(message);
+					json_decref(root);
+					return;
 				}
 			}
 			else {
@@ -569,12 +579,55 @@ void ParseJsonData(char *json_data) {
 						json_string_value(user),
 						json_string_value(url));
 					SendIrcMessage(message);
+					json_decref(root);
+					return;
 				}
 			}
 		}
 	}
-	else
-		Log(LOCAL, "Got webhook data without a conditional branch for it!");
+	
+	// Process push commits
+	json_t *commits = json_object_get(root, "commits");
+	json_t *committer;
+	json_t *username;
+	json_t *msg;
+	json_t *url;
+	if (commits != NULL) {
+		if (ignore_commits) {
+			json_decref(root);
+			return;
+		}
+
+		int arrlen = json_array_size(commits);
+		fprintf(stderr, "arrlen: %d\n", arrlen);
+		int cnt;
+		for (cnt = 0; cnt < arrlen; cnt++) {
+			json_t *arrobj = json_array_get(commits, cnt);
+			
+			committer = json_object_get(arrobj, "committer");
+			if (json_is_object(committer))
+				username = json_object_get(committer, "username");	
+
+			msg = json_object_get(arrobj, "message");
+			url = json_object_get(arrobj, "url");
+			
+			if (json_is_string(username) && json_is_string(msg) &&
+			  json_is_string(url)) {
+				char message[512];
+				snprintf(message, sizeof(message),
+					"[%sCommits%s]: '%s' from %s - %s",
+					CYAN, NORMAL,
+					json_string_value(msg),
+					json_string_value(username),
+					json_string_value(url));
+				SendIrcMessage(message);
+				json_decref(root);
+				return;
+			}
+		}
+	}
+
+	Log(LOCAL, "Got webhook data without a conditional branch for it!");
 
 	json_decref(root);
 }
