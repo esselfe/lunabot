@@ -1,6 +1,6 @@
 
 CFLAGS = -std=c17 -Wall -Wno-unused-but-set-variable -D_DEFAULT_SOURCE -O0
-LDFLAGS = -lpthread -lmicrohttpd -ljansson -lssl -lcrypto
+LDFLAGS = -lpthread -lmicrohttpd -ljansson -lssl -lcrypto -ldl
 OBJDIR = obj
 OBJS = $(OBJDIR)/lunabot.o
 PROGNAME = lunabot
@@ -11,7 +11,7 @@ LIBNAME = liblunabot.so
 default: all
 
 all: prepare $(LIBNAME) $(PROGNAME)
-	@ls -l --color=auto $(PROGNAME) || true
+	@ls -l --color=auto $(LIBNAME) $(PROGNAME) || true
 
 prepare:
 	@[ -d "$(OBJDIR)" ] || mkdir -v "$(OBJDIR)"
@@ -26,5 +26,5 @@ $(PROGNAME): $(OBJS)
 	gcc $(OBJS) -o $(PROGNAME) $(LDFLAGS)
 
 clean:
-	@rm -rfv $(OBJDIR) $(PROGNAME) || true
+	@rm -rfv $(OBJDIR) $(LIBNAME) $(PROGNAME) || true
 
