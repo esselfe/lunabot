@@ -13,7 +13,7 @@
 
 struct GlobalVariables *libglobals;
 
-void Log_func(unsigned int direction, char *text) {
+void Log(unsigned int direction, char *text) {
 	char *dirstr;
 	if (direction == LOCAL)
 		dirstr = "||";
@@ -55,8 +55,8 @@ void Log_func(unsigned int direction, char *text) {
 }
 
 // Function to send messages to the IRC channel
-void SendIrcMessage_func(const char *message) {
-	Log_func(OUT, (char *)message);
+void SendIrcMessage(const char *message) {
+	Log(OUT, (char *)message);
 	char buffer_msg[BUFFER_SIZE * 16];
 	snprintf(buffer_msg, sizeof(buffer_msg), "PRIVMSG %s :%s\r\n",
 		libglobals->channel, message);
@@ -79,14 +79,14 @@ int VerifySignature_func(const char *payload, const char *signature) {
 	if (secret == NULL || secret_len == 0) {
 		secret = malloc(BUFFER_SIZE);
 		if (secret == NULL) {
-			Log_func(LOCAL, "lunabot::VerifySignature(): Cannot allocate memory");
+			Log(LOCAL, "lunabot::VerifySignature(): Cannot allocate memory");
 			exit(1);
 		}
 		memset(secret, 0, BUFFER_SIZE);
 
 		FILE *fp = fopen(".secret", "r");
 		if (fp == NULL) {
-			Log_func(LOCAL, "lunabot::VerifySignature(): .secret file not found!");
+			Log(LOCAL, "lunabot::VerifySignature(): .secret file not found!");
 			exit(1);
 		}
 		else {
@@ -124,7 +124,7 @@ int VerifySignature_func(const char *payload, const char *signature) {
 	return is_invalid;
 }
 
-void ParseJsonData_func(char *json_data) {
+void ParseJsonData(char *json_data) {
 	if (libglobals->debug)
 		fprintf(stderr, "ParseJsonData() started\n");
 
@@ -135,7 +135,7 @@ void ParseJsonData_func(char *json_data) {
 
 	if (!root) {
 		sprintf(buffer, "JSON parsing error: %s", error.text);
-		Log_func(LOCAL, buffer);
+		Log(LOCAL, buffer);
 		return;
 	}
 
@@ -189,16 +189,16 @@ void ParseJsonData_func(char *json_data) {
 			color = GREEN;
 		}
 		else if (strcmp(status_str, "failure") == 0) {
-			sprintf(status_str, "%s", "Failed");
+			sprintf(status_str, "%s ", "Failed");
 			color = RED;
 		}
 
 		snprintf(buffer, sizeof(buffer),
-			"[%s%s%s]: '%s' %s",
+			"[%s%s%s]:   '%s' %s",
 			color, status_str, NORMAL,
 			json_string_value(msg), 
 			json_string_value(target_url));
-		SendIrcMessage_func(buffer);
+		SendIrcMessage(buffer);
 		free(status_str);
 	
 		json_decref(root);
@@ -237,13 +237,13 @@ void ParseJsonData_func(char *json_data) {
 				json_t *label = json_object_get(root, "label");
 				json_t *label_name = json_object_get(label, "name");
 				snprintf(buffer, sizeof(buffer), 
-					"[%sLabels%s]: %s added the '%s' label to '%s' - %s",
+					"[%sLabels%s]:    %s added the '%s' label to '%s' - %s",
 					LIGHT_GREEN, NORMAL,
 					json_string_value(username),
 					json_string_value(label_name),
 					json_string_value(title), 
 					json_string_value(url));
-				SendIrcMessage_func(buffer);
+				SendIrcMessage(buffer);
 				json_decref(root);
 				return;
 			}
@@ -276,13 +276,13 @@ void ParseJsonData_func(char *json_data) {
 				json_t *label = json_object_get(root, "label");
 				json_t *label_name = json_object_get(label, "name");
 				snprintf(buffer, sizeof(buffer), 
-					"[%sLabels%s]: %s removed the '%s' label to '%s' - %s",
+					"[%sLabels%s]:    %s removed the '%s' label to '%s' - %s",
 					LIGHT_GREEN, NORMAL,
 					json_string_value(username),
 					json_string_value(label_name),
 					json_string_value(title), 
 					json_string_value(url));
-				SendIrcMessage_func(buffer);
+				SendIrcMessage(buffer);
 				json_decref(root);
 				return;
 			}
@@ -294,12 +294,12 @@ void ParseJsonData_func(char *json_data) {
 
 			if (json_is_string(title) && json_is_string(user) && json_is_string(url)) {
 				snprintf(buffer, sizeof(buffer), 
-					"[%sNew PR%s]: '%s' from %s - %s",
+					"[%sNew PR%s]:    '%s' from %s - %s",
 					GREEN, NORMAL,
 					json_string_value(title), 
 					json_string_value(user), 
 					json_string_value(url));
-				SendIrcMessage_func(buffer);
+				SendIrcMessage(buffer);
 				json_decref(root);
 				return;
 			}
@@ -317,7 +317,7 @@ void ParseJsonData_func(char *json_data) {
 						json_string_value(title),
 						json_string_value(user),
 						json_string_value(url));
-					SendIrcMessage_func(buffer);
+					SendIrcMessage(buffer);
 					json_decref(root);
 					return;
 				}
@@ -330,7 +330,7 @@ void ParseJsonData_func(char *json_data) {
 						json_string_value(title),
 						json_string_value(user),
 						json_string_value(url));
-					SendIrcMessage_func(buffer);
+					SendIrcMessage(buffer);
 					json_decref(root);
 					return;
 				}
@@ -371,25 +371,25 @@ void ParseJsonData_func(char *json_data) {
 			if (json_is_string(username) && json_is_string(msg) &&
 			  json_is_string(url)) {
 				snprintf(buffer, sizeof(buffer),
-					"[%sCommits%s]: '%s' from %s - %s",
+					"[%sCommits%s]:   '%s' from %s - %s",
 					CYAN, NORMAL,
 					json_string_value(msg),
 					json_string_value(username),
 					json_string_value(url));
-				SendIrcMessage_func(buffer);
+				SendIrcMessage(buffer);
 				json_decref(root);
 				return;
 			}
 		}
 	}
 
-	Log_func(LOCAL, "Got webhook data without a conditional branch for it!");
+	Log(LOCAL, "Got webhook data without a conditional branch for it!");
 
 	json_decref(root);
 }
 
 // HTTP request handler
-enum MHD_Result WebhookCallback_func(void *cls, struct MHD_Connection *connection, 
+enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connection, 
 		const char *url, const char *method, 
 		const char *version, const char *upload_data,
 		unsigned long *upload_data_size, void **ptr) {
@@ -407,7 +407,7 @@ enum MHD_Result WebhookCallback_func(void *cls, struct MHD_Connection *connectio
 				data, MHD_RESPMEM_PERSISTENT);
 		int ret = MHD_queue_response(connection, 401, response401);
 		MHD_destroy_response(response401);
-		Log_func(LOCAL, "Webhook signature missing from the HTTP header!");
+		Log(LOCAL, "Webhook signature missing from the HTTP header!");
 		return ret;
 	}
 
@@ -415,7 +415,7 @@ enum MHD_Result WebhookCallback_func(void *cls, struct MHD_Connection *connectio
 	if (*ptr == NULL) {
 		json_buffer = malloc(json_buffer_size); // Initial allocation (adjust as needed)
 		if (!json_buffer) {
-			Log_func(LOCAL, "lunabot::WebhookCallback() error: Cannot allocate memory");
+			Log(LOCAL, "lunabot::WebhookCallback() error: Cannot allocate memory");
 			return MHD_NO;
 		}
 		memset(json_buffer, 0, json_buffer_size);
@@ -437,7 +437,7 @@ enum MHD_Result WebhookCallback_func(void *cls, struct MHD_Connection *connectio
 			json_buffer_size = new_size + 1;
 			char *temp = realloc(json_buffer, json_buffer_size);
 			if (!temp) {
-				Log_func(LOCAL, "lunabot::WebhookCallback() error: Cannot allocate memory");
+				Log(LOCAL, "lunabot::WebhookCallback() error: Cannot allocate memory");
 				free(json_buffer);
 				return MHD_NO;
 			}
@@ -455,8 +455,8 @@ enum MHD_Result WebhookCallback_func(void *cls, struct MHD_Connection *connectio
 	}
 	// If we have all data, process JSON
 	else if (*upload_data_size == 0 && cnt >= 1) {
-		Log_func(LOCAL, "Received full webhook JSON:");
-		Log_func(IN, json_buffer);
+		Log(LOCAL, "Received full webhook JSON:");
+		Log(IN, json_buffer);
 
 		cnt = 0;
 
@@ -467,11 +467,11 @@ enum MHD_Result WebhookCallback_func(void *cls, struct MHD_Connection *connectio
 					data, MHD_RESPMEM_PERSISTENT);
 			int ret = MHD_queue_response(connection, 401, response401);
 			MHD_destroy_response(response401);
-			Log_func(LOCAL, "Webhook signature verification failed!");
+			Log(LOCAL, "Webhook signature verification failed!");
 			return ret;
 		}
 
-		ParseJsonData_func(json_buffer);
+		ParseJsonData(json_buffer);
 	}
 
 	// Clean up and send response
@@ -486,5 +486,24 @@ enum MHD_Result WebhookCallback_func(void *cls, struct MHD_Connection *connectio
 	MHD_destroy_response(response);
 	
 	return ret;
+}
+
+void liblunabotInit(void) {
+	if (libglobals->httpdaemon != NULL)
+		MHD_stop_daemon(libglobals->httpdaemon);
+
+	libglobals->httpdaemon = MHD_start_daemon(MHD_USE_SELECT_INTERNALLY,
+				libglobals->webhook_port, NULL, NULL,
+				WebhookCallback, NULL, MHD_OPTION_END);
+	if (!libglobals->httpdaemon) {
+		Log(LOCAL, "lunabot::WebhookServerStart(): Failed to start HTTP server");
+		libglobals->mainloopend = 1;
+	}
+	else {
+		char buffer[1024];
+		sprintf(buffer, "Webhook server running on port %d",
+			libglobals->webhook_port);
+		Log(LOCAL, buffer);
+	}
 }
 
