@@ -398,6 +398,17 @@ enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connection,
 	static size_t total_size = 0;
 	static unsigned int cnt = 0;
 
+	// Only accept POST requests
+	if (strcmp(method, MHD_HTTP_METHOD_POST) != 0) {
+		char *data = "<html><body><h2>401 Unauthorized</h2></body></html>";
+		struct MHD_Response *response401;
+		response401 = MHD_create_response_from_buffer(strlen(data),
+				data, MHD_RESPMEM_PERSISTENT);
+		int ret = MHD_queue_response(connection, 401, response401);
+		MHD_destroy_response(response401);
+		return ret;
+	}
+
 	const char *signature = MHD_lookup_connection_value(connection,
 					MHD_HEADER_KIND, "X-Hub-Signature-256");
 	if (!signature) {
