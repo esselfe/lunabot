@@ -189,8 +189,16 @@ void ParseJsonData(char *json_data) {
 			color = GREEN;
 		}
 		else if (strcmp(status_str, "failure") == 0) {
-			sprintf(status_str, "%s ", "Failed");
-			color = RED;
+			snprintf(buffer, sizeof(buffer),
+				"[%sFailed%s]:    '%s' %s",
+				RED, NORMAL,
+				json_string_value(msg),
+				json_string_value(target_url));
+			SendIrcMessage(buffer);
+			free(status_str);
+
+			json_decref(root);
+			return;
 		}
 
 		snprintf(buffer, sizeof(buffer),
@@ -397,7 +405,7 @@ enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connection,
 	static unsigned int json_buffer_size = BUFFER_SIZE * 16;
 	static size_t total_size = 0;
 	static unsigned int cnt = 0;
-
+	
 	// Only accept POST requests
 	if (strcmp(method, MHD_HTTP_METHOD_POST) != 0) {
 		char *data = "<html><body><h2>401 Unauthorized</h2></body></html>";
