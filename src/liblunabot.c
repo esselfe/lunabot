@@ -178,6 +178,7 @@ void ParseJsonData(char *json_data) {
 		if (strcmp(status_str, "pending") == 0) {
 			// Reduce message volume and skip those
 			if (libglobals->ignore_pending) {
+				free(status_str);
 				json_decref(root);
 				return;
 			}
