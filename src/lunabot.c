@@ -22,7 +22,7 @@
 
 #include "lunabot.h"
 
-const char *lunabot_version_string = "0.3.1";
+const char *lunabot_version_string = "0.3.2";
 
 struct GlobalVariables globals, **globals_ptr;
 char buffer[BUFFER_SIZE];
@@ -154,13 +154,16 @@ void *IrcConnect(void *arg) {
 		exit(1);
 	}
 
+	globals.irc_connected = 1;
+
 	char *ret = GetIP(globals.irc_server_hostname);
 	if (ret == NULL) {
 		sprintf(buffer_log, "lunabot::IrcConnect() error: Cannot get an IP for '%s'",
 			globals.irc_server_hostname);
 		Log_fp(LOCAL, buffer_log);
 		close(globals.irc_sock);
-		exit(1);
+		globals.irc_connected = 0;
+		return NULL;
 	}
 
 	server_addr.sin_family = AF_INET;
@@ -174,7 +177,8 @@ void *IrcConnect(void *arg) {
 			strerror(errno));
 		Log_fp(LOCAL, buffer_log);
 		close(globals.irc_sock);
-		exit(1);
+		globals.irc_connected = 0;
+		return NULL;
 	}
 
 	// Setup TLS with the new connection
@@ -187,7 +191,8 @@ void *IrcConnect(void *arg) {
 	if (!ctx) {
 		Log_fp(LOCAL, "lunabot::IrcConnect() error: Cannot create SSL context");
 		close(globals.irc_sock);
-		exit(1);
+		globals.irc_connected = 0;
+		return NULL;
 	}
 	SSL_CTX_set_options(ctx, SSL_OP_NO_COMPRESSION);
 	SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
@@ -219,7 +224,9 @@ void *IrcConnect(void *arg) {
 		if (fp == NULL) {
 			sprintf(buffer_log, "lunabot::IrcConnect() error: Cannot open .passwd: %s", strerror(errno));
 			Log_fp(LOCAL, buffer_log);
-			exit(1);
+			
+			globals.irc_connected = 0;
+			return NULL;
 		}
 
 		char pass[BUFFER_SIZE - 30];
@@ -231,7 +238,9 @@ void *IrcConnect(void *arg) {
 		Log_fp(OUT, "PRIVMSG NickServ :IDENTIFY ********");
 		SSL_write(globals.pSSL, buffer, strlen(buffer));
 	}
-// Not logged in yet, exposes hostmask, needs to be sent manually in the terminal
+	
+	// Not logged in with NickServ yet, exposes hostmask, you can comment
+	// this and send manually in the terminal if you prefer
 	sprintf(buffer, "JOIN %s\r\n", globals.channel);
 	SSL_write(globals.pSSL, buffer, strlen(buffer));
 
@@ -259,7 +268,8 @@ void *IrcConnect(void *arg) {
 	}
 
 	close(globals.irc_sock);
-	exit(0);
+	globals.irc_connected = 0;
+	
 	return NULL;
 }
 
@@ -270,6 +280,53 @@ void IrcConnectStart(void) {
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 	pthread_create(&irc_thread, &attr, IrcConnect, NULL);
 	pthread_detach(irc_thread);
+	pthread_attr_destroy(&attr);
+}
+
+// Read user input from the terminal and process per-line
+void *ConsoleReadLoop(void *argp) {
+	char buffer_line[BUFFER_SIZE];
+	while(!globals.mainloopend) {
+		memset(buffer_line, 0, BUFFER_SIZE);
+		char *ret = fgets(buffer_line, BUFFER_SIZE - 3, stdin);
+		if (ret == NULL)
+			continue;
+		else {
+			if (buffer_line[strlen(buffer_line) - 1] == '\n')
+				buffer_line[strlen(buffer_line) - 1] = '\0';
+		}
+
+		// Don't use strncmp for "quit" since "quit :message here" can be sent
+		if (strncmp(buffer_line, "exit", 4) == 0 || strcmp(buffer_line, "quit") == 0 ||
+		  strncmp(buffer_line, "qw", 2) == 0) {
+			Log_fp(LOCAL, "lunabot exited");
+			exit(0);
+		}
+		else if (strncmp(buffer_line, "reload", 6) == 0) {
+			ReloadLibrary();
+			
+			liblunabotInit_fp();
+		}
+		else if (strlen(buffer_line) > 0 && *buffer_line != '\n') {
+			Log_fp(OUT, buffer_line);
+			// Send to server, this is a raw message!
+			char buffer2[BUFFER_SIZE * 2];
+			memset(buffer2, 0, BUFFER_SIZE * 2);
+			sprintf(buffer2, "%s\r\n", buffer_line);
+			SSL_write(globals.pSSL, buffer2, strlen(buffer2));
+		}
+	}
+	
+	return NULL;
+}
+
+void ConsoleReadLoopStart(void) {
+	pthread_t console_thread;
+	pthread_attr_t attr;
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+	pthread_create(&console_thread, &attr, ConsoleReadLoop, NULL);
+	pthread_detach(console_thread);
 	pthread_attr_destroy(&attr);
 }
 
@@ -359,41 +416,18 @@ int main(int argc, char **argv) {
 		globals.log_filename = strdup(DEFAULT_LOG_FILENAME);
 	
 	globals.ignore_pending = 1;
+	
+	ConsoleReadLoopStart();
 
 	liblunabotInit_fp();
 
-	IrcConnectStart();
-
-	// Start reading user input from the terminal and process per-line
-	char buffer_line[BUFFER_SIZE];
-	while(!globals.mainloopend) {
-		memset(buffer_line, 0, BUFFER_SIZE);
-		char *ret = fgets(buffer_line, BUFFER_SIZE - 3, stdin);
-		if (ret == NULL)
-			continue;
-		else {
-			if (buffer_line[strlen(buffer_line) - 1] == '\n')
-				buffer_line[strlen(buffer_line) - 1] = '\0';
+	while (!globals.mainloopend) {
+		if (!globals.irc_connected) {
+			globals.irc_connected = 1;
+			IrcConnectStart();
 		}
-
-		if (strncmp(buffer_line, "exit", 4) == 0 || strcmp(buffer_line, "quit") == 0 ||
-		  strncmp(buffer_line, "qw", 2) == 0) {
-			globals.mainloopend = 1;
-			Log_fp(LOCAL, "lunabot exited");
-		}
-		else if (strncmp(buffer_line, "reload", 6) == 0) {
-			ReloadLibrary();
-			
-			liblunabotInit_fp();
-		}
-		else if (strlen(buffer_line) > 0 && *buffer_line != '\n') {
-			Log_fp(OUT, buffer_line);
-			// Send to server, this is a raw message!
-			char buffer2[BUFFER_SIZE * 2];
-			memset(buffer2, 0, BUFFER_SIZE * 2);
-			sprintf(buffer2, "%s\r\n", buffer_line);
-			SSL_write(globals.pSSL, buffer2, strlen(buffer2));
-		}
+		else
+			sleep(5);
 	}
 
 	return 0;

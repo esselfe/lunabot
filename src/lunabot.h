@@ -41,6 +41,7 @@ extern const char *lunabot_version_string;
 struct GlobalVariables {
 	unsigned int debug;
 	unsigned int mainloopend;
+	int irc_connected;
 	int irc_sock;
 	char *irc_server_hostname;
 	char irc_server_ip[16];
