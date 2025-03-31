@@ -1,20 +1,21 @@
 # Lunabot - IRC bot for Github webhooks
 
-Lunabot is a simple IRC bot written in the C programming language, designed to relay GitHub webhook notifications to an IRC channel. While primarily developed for the Lunar Linux project, it can be adapted for other projects by modifying a few global constants and variables.
+Lunabot is a simple IRC bot written in the C programming language, designed to relay GitHub webhook notifications to an IRC channel. While primarily developed for the Lunar-Linux project, it can be adapted for other projects by modifying a few global variables in the configuration file (lunabot.conf.json).
 
 ## Features
 
- - Connects to an IRC server over TLS.
+ - Connects to an IRC server over TLS with OpenSSL.
  - Sends messages in the channel for:
-   - New PR.
+   - New pull request.
    - Pending CI build (optional).
-   - CI build statuses, Failed or Success.
+   - CI build status, Failed or Success.
    - Closed PR.
    - Merged PR.
-   - Label operations on PRs (optional).
+   - Label operations on pull requests (optional).
  - Listens for GitHub webhook events via an embedded HTTP server.
  - Parses and formats repository events before sending them to the IRC channel.
  - Uses OpenSSL for payload signature verifications.
+ - Orchestration health checks via the /health HTTP endpoint.
 
 ## Requirements
 
@@ -28,6 +29,7 @@ To compile and run lunabot, you will need the following dependencies installed:
  - pthread (for multithreading support).
 
 ## Build and run
+
 To compile the source code into an executable, type 'make' in the source directory from a terminal.  
 You will need to put the bot's NickServ password in .passwd and the webhook secret in .secret.  
 Alternatively you can set the credentials using environment variables instead of files:
@@ -35,8 +37,10 @@ Alternatively you can set the credentials using environment variables instead of
  - LUNABOT_NICKSERV_PASSWORD
  - LUNABOT_WEBHOOK_SECRET
 
-To run the program, type './lunabot'  
-Once you have an identification confirmation from the server, you need to type 'join #channel_name_here'.  
+To run the program, type './lunabot'
+
+## Notes
+HTTPS is not implemented for the webhook listener, but you can use a proxying web server (like Apache2 or Nginx) to forward the requests to localhost over a HTTPS connection.
 
 ## Author
 Stephane Fontaine (esselfe) 2025
