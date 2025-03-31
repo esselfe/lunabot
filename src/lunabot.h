@@ -57,9 +57,17 @@ struct GlobalVariables {
 	unsigned int ignore_commits;
 	char *log_filename;
 	unsigned int disable_logging;
+	int health_check; // Internal
 };
 extern struct GlobalVariables globals;
 
-
+struct RawLine {
+	char *nick;
+	char *username;
+	char *host;
+	char *command;
+	char *channel;
+	char *text;
+};
 
 #endif /* LUNABOT_H */

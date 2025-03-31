@@ -397,6 +397,29 @@ void ParseJsonData(char *json_data) {
 	json_decref(root);
 }
 
+void *HealthCheckTimeoutFunc(void *argp) {
+	time_t current, start = time(NULL);
+	while (libglobals->health_check == 1) {
+		current = time(NULL);
+		if (current > start + 10) {
+			libglobals->health_check = -1;
+			break;
+		}
+	}
+	
+	return NULL;
+}
+
+void HealthCheckTimeoutStart(void) {
+	pthread_t health_thread;
+	pthread_attr_t attr;
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+	pthread_create(&health_thread, &attr, HealthCheckTimeoutFunc, NULL);
+	pthread_detach(health_thread);
+	pthread_attr_destroy(&attr);
+}
+
 // HTTP request handler
 enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connection, 
 		const char *url, const char *method, 
@@ -406,6 +429,42 @@ enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connection,
 	static unsigned int json_buffer_size = BUFFER_SIZE * 16;
 	static size_t total_size = 0;
 	static unsigned int cnt = 0;
+	
+	if (url) {
+		if (strcmp(method, MHD_HTTP_METHOD_GET) == 0 &&
+			strcmp(url, "/health") == 0) {
+			libglobals->health_check = 1;
+			char buffer2[BUFFER_SIZE];
+			sprintf(buffer2, "PING NickServ\r\n");
+			SSL_write(libglobals->pSSL, buffer2, strlen(buffer2));
+			
+			HealthCheckTimeoutStart();
+			
+			while (libglobals->health_check == 1)
+				sleep(1);
+			
+			if (libglobals->health_check < 0) {
+				libglobals->health_check = 0;
+				char *data = "<html><body><h2>500 Service error</h2></body></html>";
+				struct MHD_Response *response500;
+				response500 = MHD_create_response_from_buffer(strlen(data),
+						data, MHD_RESPMEM_PERSISTENT);
+				int ret = MHD_queue_response(connection, 500, response500);
+				MHD_destroy_response(response500);
+				return ret;
+			}
+			else if (libglobals->health_check > 1) {
+				libglobals->health_check = 0;
+				char *data = "<html><body><h2>200 OK</h2></body></html>";
+				struct MHD_Response *response200;
+				response200 = MHD_create_response_from_buffer(strlen(data),
+						data, MHD_RESPMEM_PERSISTENT);
+				int ret = MHD_queue_response(connection, 200, response200);
+				MHD_destroy_response(response200);
+				return ret;
+			}
+		}
+	}
 	
 	// Only accept POST requests
 	if (strcmp(method, MHD_HTTP_METHOD_POST) != 0) {
@@ -506,6 +565,205 @@ enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connection,
 	MHD_destroy_response(response);
 	
 	return ret;
+}
+
+struct RawLine *ParseRawLine(char *line) {
+	if (libglobals->debug)
+		Log(LOCAL, "ParseRawLine() started");
+
+	char buffer[BUFFER_SIZE];
+	char *c = line;
+	unsigned int cnt = 0;
+	// Recording flags
+	unsigned int rec_nick = 1, rec_username = 0, rec_host = 0;
+	unsigned int rec_command = 0, rec_channel = 0, rec_text = 0;
+	unsigned int word_size = 128;
+	char word[word_size];
+	
+	// Messages to skip:
+	if (strncmp(line, "NickServ!", 9) == 0 || strncmp(line, "ChanServ!", 9) == 0)
+		return NULL;
+	else if (strncmp(line, "PING :", 6) == 0)
+		return NULL;
+	else if (strncmp(line, "ERROR :", 7) == 0)
+		return NULL;
+
+	// Check the theorical raw.command field for raw lines to skip
+	while (1) {
+		if (*c == '\0')
+			break;
+		else if (*c == ' ') { // process at the first space encountered,
+			++c;
+			if ((*c >= '0' && *c <= '9') || strncmp(c, "MODE ", 5) == 0 ||
+				strncmp(c, "NOTICE ", 7) == 0)
+				return NULL;
+			else if (strncmp(c, "PONG ", 5) == 0) {
+				if (libglobals->health_check == 1) {
+					libglobals->health_check = 2;
+					return NULL;
+				}
+			}
+			else
+				break;
+		}
+		++c;
+	}
+	
+	struct RawLine *rawp = malloc(sizeof(struct RawLine));
+	if (rawp == NULL) {
+		Log(LOCAL, "lunabot::ParseRawLine(): Cannot allocate memory");
+		return NULL;
+	}
+	rawp->nick = malloc(word_size+1);
+	if (rawp->nick == NULL) {
+		Log(LOCAL, "lunabot::ParseRawLine(): Cannot allocate memory");
+		return NULL;
+	}
+	rawp->username = malloc(word_size+1);
+	if (rawp->username == NULL) {
+		Log(LOCAL, "lunabot::ParseRawLine(): Cannot allocate memory");
+		return NULL;
+	}
+	rawp->host = malloc(word_size+1);
+	if (rawp->host == NULL) {
+		Log(LOCAL, "lunabot::ParseRawLine(): Cannot allocate memory");
+		return NULL;
+	}
+	rawp->command = malloc(word_size+1);
+	if (rawp->command == NULL) {
+		Log(LOCAL, "lunabot::ParseRawLine(): Cannot allocate memory");
+		return NULL;
+	}
+	rawp->channel = malloc(word_size+1);
+	if (rawp->channel == NULL) {
+		Log(LOCAL, "lunabot::ParseRawLine(): Cannot allocate memory");
+		return NULL;
+	}
+	rawp->text = malloc(word_size+1);
+	if (rawp->text == NULL) {
+		Log(LOCAL, "lunabot::ParseRawLine(): Cannot allocate memory");
+		return NULL;
+	}
+
+	c = line;
+	unsigned int cnt_total = 0;
+	while (1) {
+		if (*c == ':' && cnt_total == 0) {
+			memset(word, 0, word_size);
+			++c;
+			if (libglobals->debug) {
+				sprintf(buffer, "  raw: <<%s>>", line);
+				Log(LOCAL, buffer);
+			}
+			continue;
+		}
+		else if (rec_nick && *c == '!') {
+			sprintf(rawp->nick, "%s", word);
+			memset(word, 0, word_size);
+			rec_nick = 0;
+			rec_username = 1;
+			cnt = 0;
+			if (libglobals->debug) {
+				sprintf(buffer, "  nick: <%s>", rawp->nick);
+				Log(LOCAL, buffer);
+			}
+		}
+		else if (rec_username && cnt == 0 && *c == '~') {
+			++c;
+			continue;
+		}
+		else if (rec_username && *c == '@') {
+			sprintf(rawp->username, "%s", word);
+			memset(word, 0, word_size);
+			rec_username = 0;
+			rec_host = 1;
+			cnt = 0;
+			if (libglobals->debug) {
+				sprintf(buffer, "  username: <%s>", rawp->username);
+				Log(LOCAL, buffer);
+			}
+		}
+		else if (rec_host && *c == ' ') {
+			sprintf(rawp->host, "%s", word);
+			memset(word, 0, word_size);
+			rec_host = 0;
+			rec_command = 1;
+			cnt = 0;
+			if (libglobals->debug) {
+				sprintf(buffer, "  host: <%s>", rawp->host);
+				Log(LOCAL, buffer);
+			}
+		}
+		else if (rec_command && *c == ' ') {
+			sprintf(rawp->command, "%s", word);
+			memset(word, 0, word_size);
+			rec_command = 0;
+			rec_channel = 1;
+			cnt = 0;
+			if (libglobals->debug) {
+				sprintf(buffer, "  command: <%s>", rawp->command);
+				Log(LOCAL, buffer);
+			}
+		}
+		else if (rec_channel && *c == ' ') {
+			sprintf(rawp->channel, "%s", word);
+			memset(word, 0, word_size);
+			rec_channel = 0;
+			if (strcmp(rawp->command, "PRIVMSG") == 0)
+				rec_text = 1;
+			cnt = 0;
+			if (libglobals->debug) {
+				sprintf(buffer, "  channel: <%s>", rawp->channel);
+				Log(LOCAL, buffer);
+			}
+		}
+		else if (rec_text && *c == '\0') {
+			sprintf(rawp->text, "%s", word);
+			memset(word, 0, word_size);
+			rec_text = 0;
+			cnt = 0;
+			if (libglobals->debug) {
+				sprintf(buffer, "  text: <%s>", rawp->text);
+				Log(LOCAL, buffer);
+			}
+			break;
+		}
+		else {
+			if (rec_text && *c == ':' && strlen(word) == 0) {
+				++c;
+				continue;
+			}
+			else
+				word[cnt++] = *c;
+		}
+
+		++cnt_total;
+		++c;
+		if (!rec_text && (*c == '\0' || *c == '\n'))
+			break;
+	}
+
+	if (libglobals->debug)
+		Log(LOCAL, "ParseRawLine() ended\n");
+	
+	return rawp;
+}
+
+void FreeRawLine(struct RawLine *rawp) {
+	if (rawp->nick)
+		free(rawp->nick);
+	if (rawp->username)
+		free(rawp->username);
+	if (rawp->host)
+		free(rawp->host);
+	if (rawp->command)
+		free(rawp->command);
+	if (rawp->channel)
+		free(rawp->channel);
+	if (rawp->text)
+		free(rawp->text);
+
+	free(rawp);
 }
 
 void liblunabotInit(void) {

@@ -22,7 +22,7 @@
 
 #include "lunabot.h"
 
-const char *lunabot_version_string = "0.4.0";
+const char *lunabot_version_string = "0.5.0";
 
 struct GlobalVariables globals, **globals_ptr;
 char buffer[BUFFER_SIZE];
@@ -51,6 +51,8 @@ printf("lunabot option usage: lunabot --help/-h | --version/-V | --debug/-d |\n"
 
 void *handle;
 void (*Log_fp)(unsigned int direction, char *text);
+struct RawLine *(*ParseRawLine_fp)(char *line);
+void (*FreeRawLine_fp)(struct RawLine *rawp);
 void (*SendIrcMessage_fp)(const char *message);
 void (*liblunabotInit_fp)(void);
 
@@ -91,6 +93,24 @@ void ReloadLibrary(void) {
 	if (Log_fp == NULL) {
 		fprintf(stderr,
 			"lunabot::ReloadLibrary() error: Cannot load Log(): %s\n",
+			dlerror());
+		dlclose(handle);
+		exit(1);
+	}
+	
+	*(void **)(&FreeRawLine_fp) = dlsym(handle, "FreeRawLine");
+	if (FreeRawLine_fp == NULL) {
+		fprintf(stderr,
+			"lunabot::ReloadLibrary() error: Cannot load FreeRawLine(): %s\n",
+			dlerror());
+		dlclose(handle);
+		exit(1);
+	}
+	
+	*(void **)(&ParseRawLine_fp) = dlsym(handle, "ParseRawLine");
+	if (ParseRawLine_fp == NULL) {
+		fprintf(stderr,
+			"lunabot::ReloadLibrary() error: Cannot load ParseRawLine(): %s\n",
 			dlerror());
 		dlclose(handle);
 		exit(1);
@@ -262,9 +282,18 @@ void *IrcConnect(void *arg) {
 		if (strncmp(buffer, "PING", 4) == 0) {
 			sprintf(buffer2, "PONG %s\r\n", buffer + 5);
 			SSL_write(globals.pSSL, buffer2, strlen(buffer2));
+			continue;
 		}
 		else
 			Log_fp(IN, buffer);
+		
+		struct RawLine *raw = ParseRawLine_fp(buffer);
+		if (raw != NULL) {
+			if (strcmp(raw->command, "PONG") == 0)
+				Log_fp(LOCAL, "Got a pong from the server!");
+
+			FreeRawLine_fp(raw);
+		}
 	}
 
 	close(globals.irc_sock);
