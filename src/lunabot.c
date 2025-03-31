@@ -22,7 +22,7 @@
 
 #include "lunabot.h"
 
-const char *lunabot_version_string = "0.3.2";
+const char *lunabot_version_string = "0.4.0";
 
 struct GlobalVariables globals, **globals_ptr;
 char buffer[BUFFER_SIZE];
@@ -330,6 +330,58 @@ void ConsoleReadLoopStart(void) {
 	pthread_attr_destroy(&attr);
 }
 
+void ParseConfig(void) {
+	json_error_t error;
+	json_t *root = json_load_file("lunabot.conf.json", 0, &error);
+	if (!root) {
+		sprintf(buffer, "lunabot::ParseConfig() JSON parsing error: %s", error.text);
+		Log_fp(LOCAL, buffer);
+		return;
+	}
+	
+	json_t *opt_debug = json_object_get(root, "debug");
+	if (opt_debug)
+		globals.debug = json_is_true(opt_debug);
+	
+	json_t *opt_log_filename = json_object_get(root, "log_filename");
+	if (opt_log_filename)
+		globals.log_filename = strdup(json_string_value(opt_log_filename));
+	
+	json_t *opt_disable_logging = json_object_get(root, "disable_logging");
+	if (opt_disable_logging)
+		globals.disable_logging = json_is_true(opt_disable_logging);
+	
+	json_t *opt_nick = json_object_get(root, "nick");
+	if (opt_nick)
+		globals.nick = strdup(json_string_value(opt_nick));
+	
+	json_t *opt_channel = json_object_get(root, "channel");
+	if (opt_channel)
+		globals.channel = strdup(json_string_value(opt_channel));
+	
+	json_t *opt_only_core_labels = json_object_get(root, "only_core_labels");
+	if (opt_only_core_labels)
+		globals.only_core_labels = json_is_true(opt_only_core_labels);
+
+	json_t *opt_ignore_labels = json_object_get(root, "ignore_labels");
+	if (opt_ignore_labels)
+		globals.ignore_labels = json_is_true(opt_ignore_labels);
+
+	json_t *opt_ignore_pending = json_object_get(root, "ignore_pending");
+	if (opt_ignore_pending)
+		globals.ignore_pending = json_is_true(opt_ignore_pending);
+
+	json_t *opt_ignore_commits = json_object_get(root, "ignore_commits");
+	if (opt_ignore_commits)
+		globals.ignore_commits = json_is_true(opt_ignore_commits);
+
+	json_t *opt_webhook_port = json_object_get(root, "webhook_port");
+	if (opt_webhook_port)
+		globals.webhook_port = (unsigned int)json_integer_value(opt_webhook_port);
+	
+	json_decref(root);
+}
+
 void ParseArgs(int *argc, char **argv) {
 	int c;
 	while (1) {
@@ -395,6 +447,7 @@ void ParseArgs(int *argc, char **argv) {
 int main(int argc, char **argv) {
 	ReloadLibrary();
 
+	ParseConfig();
 	ParseArgs(&argc, argv);
 
 	if (!globals.irc_server_hostname)
@@ -415,7 +468,6 @@ int main(int argc, char **argv) {
 	if (!globals.log_filename)
 		globals.log_filename = strdup(DEFAULT_LOG_FILENAME);
 	
-	globals.ignore_pending = 1;
 	
 	ConsoleReadLoopStart();
 
