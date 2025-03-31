@@ -405,6 +405,8 @@ void *HealthCheckTimeoutFunc(void *argp) {
 			libglobals->health_check = -1;
 			break;
 		}
+		else
+			sleep(1);
 	}
 	
 	return NULL;
