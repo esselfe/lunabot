@@ -568,17 +568,17 @@ enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connection,
 }
 
 void FreeRawLine(struct RawLine *rawp) {
-	if (rawp->nick)
+	if (rawp->nick != NULL)
 		free(rawp->nick);
-	if (rawp->username)
+	if (rawp->username != NULL)
 		free(rawp->username);
-	if (rawp->host)
+	if (rawp->host != NULL)
 		free(rawp->host);
-	if (rawp->command)
+	if (rawp->command != NULL)
 		free(rawp->command);
-	if (rawp->channel)
+	if (rawp->channel != NULL)
 		free(rawp->channel);
-	if (rawp->text)
+	if (rawp->text != NULL)
 		free(rawp->text);
 
 	free(rawp);
