@@ -95,7 +95,7 @@ int VerifySignature_func(const char *payload, const char *signature) {
 		}
 	}
 	else
-		sprintf(secret, "%s", secret_env);
+		snprintf(secret, BUFFER_SIZE - 1, "%s", secret_env);
 
 	HMAC(EVP_sha256(), secret, strlen(secret), (unsigned char*)payload,
 		strlen(payload), hash, &hash_len);
