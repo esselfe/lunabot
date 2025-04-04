@@ -567,6 +567,23 @@ enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connection,
 	return ret;
 }
 
+void FreeRawLine(struct RawLine *rawp) {
+	if (rawp->nick)
+		free(rawp->nick);
+	if (rawp->username)
+		free(rawp->username);
+	if (rawp->host)
+		free(rawp->host);
+	if (rawp->command)
+		free(rawp->command);
+	if (rawp->channel)
+		free(rawp->channel);
+	if (rawp->text)
+		free(rawp->text);
+
+	free(rawp);
+}
+
 struct RawLine *ParseRawLine(char *line) {
 	if (libglobals->debug)
 		Log(LOCAL, "ParseRawLine() started");
@@ -617,31 +634,37 @@ struct RawLine *ParseRawLine(char *line) {
 	rawp->nick = malloc(word_size+1);
 	if (rawp->nick == NULL) {
 		Log(LOCAL, "lunabot::ParseRawLine(): Cannot allocate memory");
+		FreeRawLine(rawp);
 		return NULL;
 	}
 	rawp->username = malloc(word_size+1);
 	if (rawp->username == NULL) {
 		Log(LOCAL, "lunabot::ParseRawLine(): Cannot allocate memory");
+		FreeRawLine(rawp);
 		return NULL;
 	}
 	rawp->host = malloc(word_size+1);
 	if (rawp->host == NULL) {
 		Log(LOCAL, "lunabot::ParseRawLine(): Cannot allocate memory");
+		FreeRawLine(rawp);
 		return NULL;
 	}
 	rawp->command = malloc(word_size+1);
 	if (rawp->command == NULL) {
 		Log(LOCAL, "lunabot::ParseRawLine(): Cannot allocate memory");
+		FreeRawLine(rawp);
 		return NULL;
 	}
 	rawp->channel = malloc(word_size+1);
 	if (rawp->channel == NULL) {
 		Log(LOCAL, "lunabot::ParseRawLine(): Cannot allocate memory");
+		FreeRawLine(rawp);
 		return NULL;
 	}
 	rawp->text = malloc(word_size+1);
 	if (rawp->text == NULL) {
 		Log(LOCAL, "lunabot::ParseRawLine(): Cannot allocate memory");
+		FreeRawLine(rawp);
 		return NULL;
 	}
 
@@ -747,23 +770,6 @@ struct RawLine *ParseRawLine(char *line) {
 		Log(LOCAL, "ParseRawLine() ended\n");
 	
 	return rawp;
-}
-
-void FreeRawLine(struct RawLine *rawp) {
-	if (rawp->nick)
-		free(rawp->nick);
-	if (rawp->username)
-		free(rawp->username);
-	if (rawp->host)
-		free(rawp->host);
-	if (rawp->command)
-		free(rawp->command);
-	if (rawp->channel)
-		free(rawp->channel);
-	if (rawp->text)
-		free(rawp->text);
-
-	free(rawp);
 }
 
 void liblunabotInit(void) {
