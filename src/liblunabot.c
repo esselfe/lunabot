@@ -70,18 +70,14 @@ int VerifySignature_func(const char *payload, const char *signature) {
 
 	unsigned int hash_len = 32;
 	unsigned char hash[hash_len];
-	char *secret = (char *)getenv("LUNABOT_WEBHOOK_SECRET");
+	char *secret_env = (char *)getenv("LUNABOT_WEBHOOK_SECRET");
+	char secret[BUFFER_SIZE];
 
 	unsigned int secret_len = 0;
-	if (secret != NULL)
-		secret_len = strlen(secret);
+	if (secret_env != NULL)
+		secret_len = strlen(secret_env);
 
-	if (secret == NULL || secret_len == 0) {
-		secret = malloc(BUFFER_SIZE);
-		if (secret == NULL) {
-			Log(LOCAL, "lunabot::VerifySignature(): Cannot allocate memory");
-			exit(1);
-		}
+	if (secret_env == NULL || secret_len == 0) {
 		memset(secret, 0, BUFFER_SIZE);
 
 		FILE *fp = fopen(".secret", "r");
@@ -98,6 +94,8 @@ int VerifySignature_func(const char *payload, const char *signature) {
 				secret[strlen(secret)-1] = '\0';
 		}
 	}
+	else
+		sprintf(secret, "%s", secret_env);
 
 	HMAC(EVP_sha256(), secret, strlen(secret), (unsigned char*)payload,
 		strlen(payload), hash, &hash_len);
