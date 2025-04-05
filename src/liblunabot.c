@@ -631,6 +631,9 @@ struct RawLine *ParseRawLine(char *line) {
 		Log(LOCAL, "lunabot::ParseRawLine(): Cannot allocate memory");
 		return NULL;
 	}
+	else
+		memset(rawp, 0, sizeof(struct RawLine));
+
 	rawp->nick = malloc(word_size+1);
 	if (rawp->nick == NULL) {
 		Log(LOCAL, "lunabot::ParseRawLine(): Cannot allocate memory");
