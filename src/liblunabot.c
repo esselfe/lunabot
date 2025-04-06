@@ -74,7 +74,7 @@ int VerifySignature_func(const char *payload, const char *signature) {
 
 	unsigned int hash_len = 32;
 	unsigned char hash[hash_len];
-	char *secret_env = (char *)getenv("LUNABOT_WEBHOOK_SECRET");
+	char *secret_env = getenv("LUNABOT_WEBHOOK_SECRET");
 	char secret[BUFFER_SIZE];
 
 	unsigned int secret_len = 0;
