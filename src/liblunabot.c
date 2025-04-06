@@ -25,7 +25,8 @@ void Log(unsigned int direction, char *text) {
 		dirstr = "!!";
 	
 	time_t t0 = time(NULL);
-	struct tm *tm0 = gmtime(&t0);
+	struct tm *tm0 = (struct tm *)malloc(sizeof(struct tm));
+	gmtime_r(&t0, tm0);
 	struct timeval tv0;
 	gettimeofday(&tv0, NULL);
 
@@ -36,8 +37,10 @@ void Log(unsigned int direction, char *text) {
 		tm0->tm_hour, tm0->tm_min, tm0->tm_sec, tv0.tv_usec,
 		dirstr, text);
 	
-	if (libglobals->disable_logging)
+	if (libglobals->disable_logging) {
+		free(tm0);
 		return;
+	}
 
 	FILE *log_fp = fopen(libglobals->log_filename, "a+");
 	if (log_fp == NULL) {
@@ -51,6 +54,7 @@ void Log(unsigned int direction, char *text) {
 		tm0->tm_hour, tm0->tm_min, tm0->tm_sec, tv0.tv_usec,
 		dirstr, text);
 
+	free(tm0);
 	fclose(log_fp);
 }
 
