@@ -1,12 +1,13 @@
 {
-"debug":            false,
-"log_filename":     "lunabot.log",
-"disable_logging":  false,
-"nick":             "lunabot",
-"channel":          "#lunar-lunabot",
-"only_core_labels": false,
-"ignore_labels":    false,
-"ignore_pending":   true,
-"ignore_commits":   true,
-"webhook_port":     3000
+"debug":             false,
+"log_filename":      "lunabot.log",
+"disable_logging":   false,
+"nick":              "lunabot",
+"channel":           "#lunar-lunabot",
+"health_check_wait": 15,
+"only_core_labels":  false,
+"ignore_labels":     false,
+"ignore_pending":    true,
+"ignore_commits":    true,
+"webhook_port":      3000
 }

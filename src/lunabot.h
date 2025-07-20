@@ -1,17 +1,19 @@
 #ifndef LUNABOT_H
 #define LUNABOT_H 1
 
+#include <time.h>
 #include <openssl/ssl.h>
 #include <microhttpd.h>
 
 extern const char *lunabot_version_string;
 
-#define DEFAULT_IRC_SERVER   "irc.libera.chat"
-#define DEFAULT_IRC_PORT     6697
-#define DEFAULT_NICK         "lunabot"
-#define DEFAULT_CHANNEL      "#lunar-lunabot"
-#define DEFAULT_WEBHOOK_PORT 3000
-#define DEFAULT_LOG_FILENAME "lunabot.log"
+#define DEFAULT_IRC_SERVER        "irc.libera.chat"
+#define DEFAULT_IRC_PORT          6697
+#define DEFAULT_NICK              "lunabot"
+#define DEFAULT_CHANNEL           "#lunar-lunabot"
+#define DEFAULT_WEBHOOK_PORT      3000
+#define DEFAULT_LOG_FILENAME      "lunabot.log"
+#define DEFAULT_HEALTH_CHECK_WAIT 15
 
 #define BUFFER_SIZE 1024
 
@@ -58,6 +60,8 @@ struct GlobalVariables {
 	char *log_filename;
 	unsigned int disable_logging;
 	int health_check; // Internal
+	int health_check_wait;
+	time_t health_check_tprev, health_check_t0;
 };
 extern struct GlobalVariables globals;
 

@@ -408,6 +408,10 @@ void ParseConfig(void) {
 	if (opt_webhook_port)
 		globals.webhook_port = (unsigned int)json_integer_value(opt_webhook_port);
 	
+	json_t *opt_health_check_wait = json_object_get(root, "health_check_wait");
+	if (opt_health_check_wait)
+		globals.health_check_wait = (unsigned int)json_integer_value(opt_health_check_wait);
+
 	json_decref(root);
 }
 
@@ -497,6 +501,8 @@ int main(int argc, char **argv) {
 	if (!globals.log_filename)
 		globals.log_filename = strdup(DEFAULT_LOG_FILENAME);
 	
+	if (!globals.health_check_wait)
+		globals.health_check_wait = DEFAULT_HEALTH_CHECK_WAIT;
 	
 	ConsoleReadLoopStart();
 

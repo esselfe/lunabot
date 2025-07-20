@@ -13,8 +13,6 @@
 
 struct GlobalVariables *libglobals;
 
-const char *nullstr = "(null)";
-
 void Log(unsigned int direction, char *text) {
 	char *dirstr;
 	if (direction == LOCAL)
@@ -514,15 +512,26 @@ enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connection,
 	if (url) {
 		if (strcmp(method, MHD_HTTP_METHOD_GET) == 0 &&
 			strcmp(url, "/health") == 0) {
-			libglobals->health_check = 1;
-			char buffer2[BUFFER_SIZE];
-			sprintf(buffer2, "PING NickServ\r\n");
-			SSL_write(libglobals->pSSL, buffer2, strlen(buffer2));
+			// Ratelimit requests to prevent abuse
+			libglobals->health_check_t0 = time(NULL);
+			if (libglobals->health_check_t0 >
+			  libglobals->health_check_tprev + libglobals->health_check_wait) {
+				libglobals->health_check_tprev = libglobals->health_check_t0;
 			
-			HealthCheckTimeoutStart();
-			
-			while (libglobals->health_check == 1)
+				libglobals->health_check = 1;
+				char buffer2[BUFFER_SIZE];
+				sprintf(buffer2, "PING NickServ\r\n");
+				SSL_write(libglobals->pSSL, buffer2, strlen(buffer2));
+				
+				HealthCheckTimeoutStart();
+				
+				while (libglobals->health_check == 1)
+					sleep(1);
+			}
+			else {
 				sleep(1);
+				libglobals->health_check = 2;
+			}
 			
 			if (libglobals->health_check < 0) {
 				libglobals->health_check = 0;
@@ -873,5 +882,7 @@ void liblunabotInit(void) {
 			libglobals->webhook_port);
 		Log(LOCAL, buffer);
 	}
+	
+	libglobals->health_check_tprev = time(NULL);
 }
 
