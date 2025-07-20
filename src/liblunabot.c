@@ -13,6 +13,8 @@
 
 struct GlobalVariables *libglobals;
 
+const char *nullstr = "(null)";
+
 void Log(unsigned int direction, char *text) {
 	char *dirstr;
 	if (direction == LOCAL)
@@ -126,6 +128,43 @@ int VerifySignature_func(const char *payload, const char *signature) {
 	return is_invalid;
 }
 
+char *SanitizeMessage(json_t *root, json_t *msg) {
+	size_t msg_text_len = json_string_length(msg);
+	if (msg_text_len < 1) {
+		char *str = malloc(7);
+		if (str == NULL) {
+			fprintf(stderr, "SanitizeMessage() error: malloc() failed!\n");
+			exit(1);
+			return NULL;
+		}
+		sprintf(str, "(null)");
+		return str;
+	}
+	
+	char *msg_text = malloc(msg_text_len + 1);
+	if (msg_text == NULL) {
+		fprintf(stderr, "SanitizeMessage() error: malloc() failed!\n");
+		exit(1);
+		return NULL;
+	}
+	memset(msg_text, 0, msg_text_len + 1);
+	
+	const char *msg_text_orig = json_string_value(msg);
+	char *c = (char *)msg_text_orig;
+	unsigned int msg_cnt = 0;
+	while (*c != '\0') {
+		if (*c == '\n' || *c == '\r' || *c == '\a' || *c == '\033')
+			msg_text[msg_cnt] = ' ';
+		else
+			msg_text[msg_cnt] = msg_text_orig[msg_cnt];
+
+		++c;
+		++msg_cnt;
+	}
+	
+	return msg_text;
+}
+
 void ParseJsonData(char *json_data) {
 	if (libglobals->debug)
 		fprintf(stderr, "ParseJsonData() started\n");
@@ -175,25 +214,7 @@ void ParseJsonData(char *json_data) {
 			json_decref(root);
 			return;
 		}
-		size_t msg_text_len = json_string_length(msg);
-		if (msg_text_len < 1) {
-			json_decref(root);
-			return;
-		}
-		char *msg_text = malloc(msg_text_len + 1);
-		memset(msg_text, 0, msg_text_len + 1);
-		const char *msg_text_orig = json_string_value(msg);
-		char *c = (char *)msg_text_orig;
-		unsigned int msg_cnt = 0;
-		while (*c != '\0') {
-			if (*c == '\n' || *c == '\r' || *c == '\a' || *c == '\033')
-				msg_text[msg_cnt] = ' ';
-			else
-				msg_text[msg_cnt] = msg_text_orig[msg_cnt];
-
-			++c;
-			++msg_cnt;
-		}
+		char *msg_text = SanitizeMessage(root, msg);
 
 		char *color;
 		char *status_str = strdup(json_string_value(status));
@@ -232,9 +253,9 @@ void ParseJsonData(char *json_data) {
 			msg_text, 
 			json_string_value(target_url));
 		SendIrcMessage(buffer);
+		
 		free(msg_text);
 		free(status_str);
-	
 		json_decref(root);
 		return;
 	}
@@ -267,22 +288,11 @@ void ParseJsonData(char *json_data) {
 			if (json_is_object(sender)) {
 				json_t *username = json_object_get(sender, "login");
 				json_t *title = json_object_get(pr, "title");
-		
-				size_t title_text_len = json_string_length(title);
-				char *title_text = malloc(title_text_len + 1);
-				memset(title_text, 0, title_text_len + 1);
-				const char *title_text_orig = json_string_value(title);
-				char *c = (char *)title_text_orig;
-				unsigned int title_cnt = 0;
-				while (*c != '\0') {
-					if (*c == '\n' || *c == '\r' || *c == '\a' || *c == '\033')
-						title_text[title_cnt] = ' ';
-					else
-						title_text[title_cnt] = title_text_orig[title_cnt];
-
-					++c;
-					++title_cnt;
+				if (!json_is_string(title)) {
+					json_decref(root);
+					return;
 				}
+				char *title_text = SanitizeMessage(root, title);
 
 				json_t *url = json_object_get(pr, "html_url");
 				json_t *label = json_object_get(root, "label");
@@ -324,22 +334,11 @@ void ParseJsonData(char *json_data) {
 			if (json_is_object(sender)) {
 				json_t *username = json_object_get(sender, "login");
 				json_t *title = json_object_get(pr, "title");
-
-				size_t title_text_len = json_string_length(title);
-				char *title_text = malloc(title_text_len + 1);
-				memset(title_text, 0, title_text_len + 1);
-				const char *title_text_orig = json_string_value(title);
-				char *c = (char *)title_text_orig;
-				unsigned int title_cnt = 0;
-				while (*c != '\0') {
-					if (*c == '\n' || *c == '\r' || *c == '\a' || *c == '\033')
-						title_text[title_cnt] = ' ';
-					else
-						title_text[title_cnt] = title_text_orig[title_cnt];
-
-					++c;
-					++title_cnt;
+				if (!json_is_string(title)) {
+					json_decref(root);
+					return;
 				}
+				char *title_text = SanitizeMessage(root, title);
 
 				json_t *url = json_object_get(pr, "html_url");
 				json_t *label = json_object_get(root, "label");
@@ -359,22 +358,11 @@ void ParseJsonData(char *json_data) {
 		}
 		else if (strcmp(json_string_value(action), "opened") == 0) {
 			json_t *title = json_object_get(pr, "title");
-
-			size_t title_text_len = json_string_length(title);
-			char *title_text = malloc(title_text_len + 1);
-			memset(title_text, 0, title_text_len + 1);
-			const char *title_text_orig = json_string_value(title);
-			char *c = (char *)title_text_orig;
-			unsigned int title_cnt = 0;
-			while (*c != '\0') {
-				if (*c == '\n' || *c == '\r' || *c == '\a' || *c == '\033')
-					title_text[title_cnt] = ' ';
-				else
-					title_text[title_cnt] = title_text_orig[title_cnt];
-
-				++c;
-				++title_cnt;
+			if (!json_is_string(title)) {
+				json_decref(root);
+				return;
 			}
+			char *title_text = SanitizeMessage(root, title);
 
 			json_t *user = json_object_get(json_object_get(pr, "user"), "login");
 			json_t *url = json_object_get(pr, "html_url");
@@ -394,22 +382,11 @@ void ParseJsonData(char *json_data) {
 		}
 		else if (strcmp(json_string_value(action), "closed") == 0) {
 			json_t *title = json_object_get(pr, "title");
-
-			size_t title_text_len = json_string_length(title);
-			char *title_text = malloc(title_text_len + 1);
-			memset(title_text, 0, title_text_len + 1);
-			const char *title_text_orig = json_string_value(title);
-			char *c = (char *)title_text_orig;
-			unsigned int title_cnt = 0;
-			while (*c != '\0') {
-				if (*c == '\n' || *c == '\r' || *c == '\a' || *c == '\033')
-					title_text[title_cnt] = ' ';
-				else
-					title_text[title_cnt] = title_text_orig[title_cnt];
-
-				++c;
-				++title_cnt;
+			if (!json_is_string(title)) {
+				json_decref(root);
+				return;
 			}
+			char *title_text = SanitizeMessage(root, title);
 
 			json_t *user = json_object_get(json_object_get(pr, "user"), "login");
 			json_t *url = json_object_get(pr, "html_url");
@@ -477,21 +454,7 @@ void ParseJsonData(char *json_data) {
 			
 			if (json_is_string(username) && json_is_string(msg) &&
 			  json_is_string(url)) {
-				size_t msg_text_len = json_string_length(msg);
-				char *msg_text = malloc(msg_text_len + 1);
-				memset(msg_text, 0, msg_text_len + 1);
-				const char *msg_text_orig = json_string_value(msg);
-				char *c = (char *)msg_text_orig;
-				unsigned int msg_cnt = 0;
-				while (*c != '\0') {
-					if (*c == '\n' || *c == '\r' || *c == '\a' || *c == '\033')
-						msg_text[msg_cnt] = ' ';
-					else
-						msg_text[msg_cnt] = msg_text_orig[msg_cnt];
-
-					++c;
-					++msg_cnt;
-				}
+				char *msg_text = SanitizeMessage(root, msg);
 
 				snprintf(buffer, sizeof(buffer),
 					"[%sCommits%s]:   '%s' from %s - %s",
@@ -500,6 +463,7 @@ void ParseJsonData(char *json_data) {
 					json_string_value(username),
 					json_string_value(url));
 				SendIrcMessage(buffer);
+				
 				free(msg_text);
 				json_decref(root);
 				return;
