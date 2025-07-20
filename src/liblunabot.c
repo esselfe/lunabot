@@ -175,11 +175,32 @@ void ParseJsonData(char *json_data) {
 			json_decref(root);
 			return;
 		}
+		size_t msg_text_len = json_string_length(msg);
+		if (msg_text_len < 1) {
+			json_decref(root);
+			return;
+		}
+		char *msg_text = malloc(msg_text_len + 1);
+		memset(msg_text, 0, msg_text_len + 1);
+		const char *msg_text_orig = json_string_value(msg);
+		char *c = (char *)msg_text_orig;
+		unsigned int msg_cnt = 0;
+		while (*c != '\0') {
+			if (*c == '\n' || *c == '\r' || *c == '\a' || *c == '\033')
+				msg_text[msg_cnt] = ' ';
+			else
+				msg_text[msg_cnt] = msg_text_orig[msg_cnt];
+
+			++c;
+			++msg_cnt;
+		}
+
 		char *color;
 		char *status_str = strdup(json_string_value(status));
 		if (strcmp(status_str, "pending") == 0) {
 			// Reduce message volume and skip those
 			if (libglobals->ignore_pending) {
+				free(msg_text);
 				free(status_str);
 				json_decref(root);
 				return;
@@ -195,9 +216,10 @@ void ParseJsonData(char *json_data) {
 			snprintf(buffer, sizeof(buffer),
 				"[%sFailed%s]:    '%s' %s",
 				RED, NORMAL,
-				json_string_value(msg),
+				msg_text,
 				json_string_value(target_url));
 			SendIrcMessage(buffer);
+			free(msg_text);
 			free(status_str);
 
 			json_decref(root);
@@ -207,9 +229,10 @@ void ParseJsonData(char *json_data) {
 		snprintf(buffer, sizeof(buffer),
 			"[%s%s%s]:   '%s' %s",
 			color, status_str, NORMAL,
-			json_string_value(msg), 
+			msg_text, 
 			json_string_value(target_url));
 		SendIrcMessage(buffer);
+		free(msg_text);
 		free(status_str);
 	
 		json_decref(root);
@@ -244,6 +267,23 @@ void ParseJsonData(char *json_data) {
 			if (json_is_object(sender)) {
 				json_t *username = json_object_get(sender, "login");
 				json_t *title = json_object_get(pr, "title");
+		
+				size_t title_text_len = json_string_length(title);
+				char *title_text = malloc(title_text_len + 1);
+				memset(title_text, 0, title_text_len + 1);
+				const char *title_text_orig = json_string_value(title);
+				char *c = (char *)title_text_orig;
+				unsigned int title_cnt = 0;
+				while (*c != '\0') {
+					if (*c == '\n' || *c == '\r' || *c == '\a' || *c == '\033')
+						title_text[title_cnt] = ' ';
+					else
+						title_text[title_cnt] = title_text_orig[title_cnt];
+
+					++c;
+					++title_cnt;
+				}
+
 				json_t *url = json_object_get(pr, "html_url");
 				json_t *label = json_object_get(root, "label");
 				json_t *label_name = json_object_get(label, "name");
@@ -252,9 +292,10 @@ void ParseJsonData(char *json_data) {
 					LIGHT_GREEN, NORMAL,
 					json_string_value(username),
 					json_string_value(label_name),
-					json_string_value(title), 
+					title_text, 
 					json_string_value(url));
 				SendIrcMessage(buffer);
+				free(title_text);
 				json_decref(root);
 				return;
 			}
@@ -283,6 +324,23 @@ void ParseJsonData(char *json_data) {
 			if (json_is_object(sender)) {
 				json_t *username = json_object_get(sender, "login");
 				json_t *title = json_object_get(pr, "title");
+
+				size_t title_text_len = json_string_length(title);
+				char *title_text = malloc(title_text_len + 1);
+				memset(title_text, 0, title_text_len + 1);
+				const char *title_text_orig = json_string_value(title);
+				char *c = (char *)title_text_orig;
+				unsigned int title_cnt = 0;
+				while (*c != '\0') {
+					if (*c == '\n' || *c == '\r' || *c == '\a' || *c == '\033')
+						title_text[title_cnt] = ' ';
+					else
+						title_text[title_cnt] = title_text_orig[title_cnt];
+
+					++c;
+					++title_cnt;
+				}
+
 				json_t *url = json_object_get(pr, "html_url");
 				json_t *label = json_object_get(root, "label");
 				json_t *label_name = json_object_get(label, "name");
@@ -291,15 +349,33 @@ void ParseJsonData(char *json_data) {
 					LIGHT_GREEN, NORMAL,
 					json_string_value(username),
 					json_string_value(label_name),
-					json_string_value(title), 
+					title_text, 
 					json_string_value(url));
 				SendIrcMessage(buffer);
+				free(title_text);
 				json_decref(root);
 				return;
 			}
 		}
 		else if (strcmp(json_string_value(action), "opened") == 0) {
 			json_t *title = json_object_get(pr, "title");
+
+			size_t title_text_len = json_string_length(title);
+			char *title_text = malloc(title_text_len + 1);
+			memset(title_text, 0, title_text_len + 1);
+			const char *title_text_orig = json_string_value(title);
+			char *c = (char *)title_text_orig;
+			unsigned int title_cnt = 0;
+			while (*c != '\0') {
+				if (*c == '\n' || *c == '\r' || *c == '\a' || *c == '\033')
+					title_text[title_cnt] = ' ';
+				else
+					title_text[title_cnt] = title_text_orig[title_cnt];
+
+				++c;
+				++title_cnt;
+			}
+
 			json_t *user = json_object_get(json_object_get(pr, "user"), "login");
 			json_t *url = json_object_get(pr, "html_url");
 
@@ -307,16 +383,34 @@ void ParseJsonData(char *json_data) {
 				snprintf(buffer, sizeof(buffer), 
 					"[%sNew PR%s]:    '%s' from %s - %s",
 					GREEN, NORMAL,
-					json_string_value(title), 
+					title_text, 
 					json_string_value(user), 
 					json_string_value(url));
 				SendIrcMessage(buffer);
+				free(title_text);
 				json_decref(root);
 				return;
 			}
 		}
 		else if (strcmp(json_string_value(action), "closed") == 0) {
 			json_t *title = json_object_get(pr, "title");
+
+			size_t title_text_len = json_string_length(title);
+			char *title_text = malloc(title_text_len + 1);
+			memset(title_text, 0, title_text_len + 1);
+			const char *title_text_orig = json_string_value(title);
+			char *c = (char *)title_text_orig;
+			unsigned int title_cnt = 0;
+			while (*c != '\0') {
+				if (*c == '\n' || *c == '\r' || *c == '\a' || *c == '\033')
+					title_text[title_cnt] = ' ';
+				else
+					title_text[title_cnt] = title_text_orig[title_cnt];
+
+				++c;
+				++title_cnt;
+			}
+
 			json_t *user = json_object_get(json_object_get(pr, "user"), "login");
 			json_t *url = json_object_get(pr, "html_url");
 			json_t *is_merged = json_object_get(pr, "merged");
@@ -325,10 +419,11 @@ void ParseJsonData(char *json_data) {
 					snprintf(buffer, sizeof(buffer),
 						"[%sMerged PR%s]: '%s' from %s - %s",
 						CYAN, NORMAL,
-						json_string_value(title),
+						title_text,
 						json_string_value(user),
 						json_string_value(url));
 					SendIrcMessage(buffer);
+					free(title_text);
 					json_decref(root);
 					return;
 				}
@@ -338,10 +433,11 @@ void ParseJsonData(char *json_data) {
 					snprintf(buffer, sizeof(buffer),
 						"[%sClosed PR%s]: '%s' from %s - %s",
 						RED, NORMAL,
-						json_string_value(title),
+						title_text,
 						json_string_value(user),
 						json_string_value(url));
 					SendIrcMessage(buffer);
+					free(title_text);
 					json_decref(root);
 					return;
 				}
@@ -381,13 +477,30 @@ void ParseJsonData(char *json_data) {
 			
 			if (json_is_string(username) && json_is_string(msg) &&
 			  json_is_string(url)) {
+				size_t msg_text_len = json_string_length(msg);
+				char *msg_text = malloc(msg_text_len + 1);
+				memset(msg_text, 0, msg_text_len + 1);
+				const char *msg_text_orig = json_string_value(msg);
+				char *c = (char *)msg_text_orig;
+				unsigned int msg_cnt = 0;
+				while (*c != '\0') {
+					if (*c == '\n' || *c == '\r' || *c == '\a' || *c == '\033')
+						msg_text[msg_cnt] = ' ';
+					else
+						msg_text[msg_cnt] = msg_text_orig[msg_cnt];
+
+					++c;
+					++msg_cnt;
+				}
+
 				snprintf(buffer, sizeof(buffer),
 					"[%sCommits%s]:   '%s' from %s - %s",
 					CYAN, NORMAL,
-					json_string_value(msg),
+					msg_text,
 					json_string_value(username),
 					json_string_value(url));
 				SendIrcMessage(buffer);
+				free(msg_text);
 				json_decref(root);
 				return;
 			}
