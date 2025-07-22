@@ -883,6 +883,6 @@ void liblunabotInit(void) {
 		Log(LOCAL, buffer);
 	}
 	
-	libglobals->health_check_tprev = time(NULL);
+	libglobals->health_check_tprev = time(NULL) - libglobals->health_check_wait - 1;
 }
 
