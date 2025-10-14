@@ -9,5 +9,6 @@
 "ignore_labels":     false,
 "ignore_pending":    true,
 "ignore_commits":    true,
-"webhook_port":      3000
+"webhook_port":      3000,
+"ci_context_name":   "continuous-integration/jenkins/pr-head"
 }

@@ -31,6 +31,7 @@ char buffer_log[BUFFER_SIZE * 4];
 static const struct option long_options[] = {
 	{"help", no_argument, NULL, 'h'},
 	{"version", no_argument, NULL, 'V'},
+	{"context", required_argument, NULL, 'C'},
 	{"channel", required_argument, NULL, 'c'},
 	{"debug", no_argument, NULL, 'd'},
 	{"irc-port", required_argument, NULL, 'p'},
@@ -40,13 +41,13 @@ static const struct option long_options[] = {
 	{"webhook-port", required_argument, NULL, 'w'},
 	{NULL, 0, NULL, 0}
 };
-static const char *short_options = "hVc:dl:n:p:s:w:";
+static const char *short_options = "hVC:c:dl:n:p:s:w:";
 
 void LunabotHelp(void) {
 printf("lunabot option usage: lunabot --help/-h | --version/-V | --debug/-d |\n"
 	"\t--channel/-c NAME | --nick/-n NAME | --irc-port/-p NUMBER |\n"
 	"\t--irc-server/-s HOSTNAME | --log/-l FILENAME, off | \n"
-	"\t--webhook-port/-w NUMBER\n");
+	"\t--webhook-port/-w NUMBER | --context/-C NAME\n");
 }
 
 void *handle;
@@ -411,6 +412,10 @@ void ParseConfig(void) {
 	json_t *opt_health_check_wait = json_object_get(root, "health_check_wait");
 	if (opt_health_check_wait)
 		globals.health_check_wait = (unsigned int)json_integer_value(opt_health_check_wait);
+	
+	json_t *opt_context_name = json_object_get(root, "ci_context_name");
+	if (opt_context_name)
+		globals.context_name = strdup(json_string_value(opt_context_name));
 
 	json_decref(root);
 }
@@ -430,6 +435,11 @@ void ParseArgs(int *argc, char **argv) {
 		case 'V': // --version
 			printf("lunabot %s\n", lunabot_version_string);
 			exit(0);
+			break;
+		case 'C': // --context
+			if (optarg != NULL && strlen(optarg))
+				globals.context_name = strdup(optarg);
+
 			break;
 		case 'c': // --channel
 			if (optarg != NULL && strlen(optarg))
@@ -503,7 +513,10 @@ int main(int argc, char **argv) {
 	
 	if (!globals.health_check_wait)
 		globals.health_check_wait = DEFAULT_HEALTH_CHECK_WAIT;
-	
+
+	if (!globals.context_name)
+		globals.context_name = strdup(DEFAULT_CONTEXT_NAME);
+
 	ConsoleReadLoopStart();
 
 	liblunabotInit_fp();

@@ -14,6 +14,7 @@ extern const char *lunabot_version_string;
 #define DEFAULT_WEBHOOK_PORT      3000
 #define DEFAULT_LOG_FILENAME      "lunabot.log"
 #define DEFAULT_HEALTH_CHECK_WAIT 15
+#define DEFAULT_CONTEXT_NAME      "default"
 
 #define BUFFER_SIZE 1024
 
@@ -51,6 +52,7 @@ struct GlobalVariables {
 	unsigned int webhook_port;
 	char *nick;
 	char *channel;
+	char *context_name;
 	SSL *pSSL;
 	struct MHD_Daemon *httpdaemon;
 	unsigned int only_core_labels; // Specific to Lunar-Linux

@@ -181,7 +181,7 @@ void ParseJsonData(char *json_data) {
 	// Process CI build statuses
 	json_t *context = json_object_get(root, "context");
 	if (json_is_string(context)) {
-		if (strcmp(json_string_value(context), "default") != 0) {
+		if (strcmp(json_string_value(context), libglobals->context_name) != 0) {
 			json_decref(root);
 			return;
 		}
