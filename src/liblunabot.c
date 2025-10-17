@@ -231,7 +231,8 @@ void ParseJsonData(char *json_data) {
 			*status_str = 'S';
 			color = GREEN;
 		}
-		else if (strcmp(status_str, "failure") == 0) {
+		else if (strcmp(status_str, "failure") == 0 ||
+			 strcmp(status_str, "error") == 0) {
 			snprintf(buffer, sizeof(buffer),
 				"[%sFailed%s]:    '%s' %s",
 				RED, NORMAL,
