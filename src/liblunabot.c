@@ -213,6 +213,13 @@ void ParseJsonData(char *json_data) {
 			return;
 		}
 		char *msg_text = SanitizeMessage(root, msg);
+		char *msg_text_limited = malloc(128);
+		if (msg_text == NULL) {
+			sprintf(buffer, "JSON parsing error: malloc() returned NULL!");
+			Log(LOCAL, buffer);
+			return;
+		}
+		snprintf(msg_text_limited, 128, "%s", msg_text);
 
 		char *color;
 		char *status_str = strdup(json_string_value(status));
@@ -220,6 +227,7 @@ void ParseJsonData(char *json_data) {
 			// Reduce message volume and skip those
 			if (libglobals->ignore_pending) {
 				free(msg_text);
+				free(msg_text_limited);
 				free(status_str);
 				json_decref(root);
 				return;
@@ -236,10 +244,11 @@ void ParseJsonData(char *json_data) {
 			snprintf(buffer, sizeof(buffer),
 				"[%sFailed%s]:    '%s' %s",
 				RED, NORMAL,
-				msg_text,
+				msg_text_limited,
 				json_string_value(target_url));
 			SendIrcMessage(buffer);
 			free(msg_text);
+			free(msg_text_limited);
 			free(status_str);
 
 			json_decref(root);
@@ -249,11 +258,12 @@ void ParseJsonData(char *json_data) {
 		snprintf(buffer, sizeof(buffer),
 			"[%s%s%s]:   '%s' %s",
 			color, status_str, NORMAL,
-			msg_text, 
+			msg_text_limited, 
 			json_string_value(target_url));
 		SendIrcMessage(buffer);
 		
 		free(msg_text);
+		free(msg_text_limited);
 		free(status_str);
 		json_decref(root);
 		return;
