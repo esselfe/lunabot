@@ -435,10 +435,16 @@ void ParseJsonData(char *json_data) {
 	json_t *check = json_object_get(root, "check_run");
 	if (check != NULL) {
 		json_t *check_status = json_object_get(check, "status");
-		if (check_status == NULL) return;
+		if (check_status == NULL) {
+			json_decref(root);
+			return;
+		}
 		
 		json_t *check_conclusion = json_object_get(check, "conclusion");
-		if (check_conclusion == NULL) return;
+		if (check_conclusion == NULL) {
+			json_decref(root);
+			return;
+		}
 		
 		if (strncmp(json_string_value(check_status), "completed", 9) == 0 &&
 			strncmp(json_string_value(check_conclusion), "failure", 7) == 0) {
