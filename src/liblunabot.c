@@ -448,9 +448,33 @@ void ParseJsonData(char *json_data) {
 		
 		if (strncmp(json_string_value(check_status), "completed", 9) == 0 &&
 			strncmp(json_string_value(check_conclusion), "failure", 7) == 0) {
+			json_t *suite = json_object_get(check, "check_suite");
+			if (suite == NULL) {
+				json_decref(root);
+				return;
+			}
+			
+			json_t *prs = json_object_get(suite, "pull_requests");
+			if (prs == NULL) {
+				json_decref(root);
+				return;
+			}
+			
+			json_t *pr = json_array_get(prs, 0);
+			if (pr == NULL) {
+				json_decref(root);
+				return;
+			}
+			
+			json_t *pr_url = json_object_get(pr, "url");
+			if (pr_url == NULL) {
+				json_decref(root);
+				return;
+			}
+			
 			snprintf(buffer, sizeof(buffer),
-				"[%sChecks%s]: check run failed",
-				RED, NORMAL);
+				"[%sChecks%s]: check run failed for %s",
+				RED, NORMAL, json_string_value(pr_url));
 			SendIrcMessage(buffer);
 			json_decref(root);
 			return;
