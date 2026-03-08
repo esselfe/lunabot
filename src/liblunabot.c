@@ -163,6 +163,16 @@ char *SanitizeMessage(json_t *root, json_t *msg) {
 	return msg_text;
 }
 
+static const char *StripGithubApiPrefix(const char *url) {
+	const char *prefix = "https://api.github.com/repos/";
+	unsigned int prefix_len = strlen(prefix);
+
+	if (strncmp(url, prefix, prefix_len) == 0)
+		return url + prefix_len;
+
+	return url;
+}
+
 void ParseJsonData(char *json_data) {
 	if (libglobals->debug)
 		fprintf(stderr, "ParseJsonData() started\n");
@@ -471,10 +481,12 @@ void ParseJsonData(char *json_data) {
 				json_decref(root);
 				return;
 			}
+		
+			const char *url_path = StripGithubApiPrefix(json_string_value(pr_url));
 			
 			snprintf(buffer, sizeof(buffer),
-				"[%sChecks%s]:    check run failed for %s",
-				RED, NORMAL, json_string_value(pr_url));
+				"[%sChecks%s]:    check run failed for https://github.com/%s",
+				RED, NORMAL, url_path);
 			SendIrcMessage(buffer);
 			json_decref(root);
 			return;
