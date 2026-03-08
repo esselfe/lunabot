@@ -181,7 +181,6 @@ static const char *StripGithubApiPrefix(const char *url) {
 // Thread to reset the lint check flag if there's no comment event.
 // It's mostly just a timeout action.
 void *ProcessLintEventCallback(void *argp) {
-	processing_lint_event = 1;
 	processing_lint_event_start_time = time(NULL);
 	
 	while (processing_lint_event) {
@@ -200,6 +199,8 @@ void *ProcessLintEventCallback(void *argp) {
 
 // Start the processing thread that makes sure the lint check flag is reset.
 void ProcessLintEventStart(void) {
+	processing_lint_event = 1;
+	
 	pthread_t lint_thread;
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
@@ -260,7 +261,7 @@ void ParseJsonData(char *json_data) {
 		}
 		char *msg_text = SanitizeMessage(root, msg);
 		char *msg_text_limited = malloc(128);
-		if (msg_text == NULL) {
+		if (msg_text_limited == NULL) {
 			sprintf(buffer, "JSON parsing error: malloc() returned NULL!");
 			Log(LOCAL, buffer);
 			return;
@@ -485,19 +486,25 @@ void ParseJsonData(char *json_data) {
 			json_decref(root);
 			return;
 		}
-		if (strncmp(json_string_value(name), "lint", 4) == 0) {
+		if (json_is_string(name) &&
+		  strncmp(json_string_value(name), "lint", 4) == 0) {
 			json_t *check_conclusion = json_object_get(check, "conclusion");
 			if (check_conclusion == NULL) {
 				json_decref(root);
 				return;
 			}
-			if (strncmp(json_string_value(check_conclusion), "failure", 7) == 0) {
+			if (json_is_string(check_conclusion) &&
+			  strncmp(json_string_value(check_conclusion), "failure", 7) == 0) {
 				ProcessLintEventStart();
 				json_decref(root);
 				return;
 			}
+			
+			json_decref(root);
+			return;
 		}
-		else if (processing_lint_event && strncmp(json_string_value(name), "comment", 7) == 0) {
+		else if (processing_lint_event && json_is_string(name) &&
+		  strncmp(json_string_value(name), "comment", 7) == 0) {
 			processing_lint_event = 0;
 			
 			json_t *check_status = json_object_get(check, "status");
@@ -506,7 +513,13 @@ void ParseJsonData(char *json_data) {
 				return;
 			}
 			
-			if (strncmp(json_string_value(check_status), "completed", 9) == 0) {
+			if (json_is_string(check_status) &&
+			  strncmp(json_string_value(check_status), "queued", 6) == 0) {
+				json_decref(root);
+				return;
+			}
+			else if (json_is_string(check_status) &&
+			  strncmp(json_string_value(check_status), "completed", 9) == 0) {
 				json_t *suite = json_object_get(check, "check_suite");
 				if (suite == NULL) {
 					json_decref(root);
@@ -515,6 +528,12 @@ void ParseJsonData(char *json_data) {
 				
 				json_t *prs = json_object_get(suite, "pull_requests");
 				if (prs == NULL) {
+					json_decref(root);
+					return;
+				}
+				
+				// Just triple check this one
+				if (!json_is_array(prs) || json_array_size(prs) == 0) {
 					json_decref(root);
 					return;
 				}
@@ -531,7 +550,13 @@ void ParseJsonData(char *json_data) {
 					return;
 				}
 			
-				const char *url_path = StripGithubApiPrefix(json_string_value(pr_url));
+				const char *url_path;
+				if (json_is_string(pr_url))
+					url_path = StripGithubApiPrefix(json_string_value(pr_url));
+				else  {
+					json_decref(root);
+					return;
+				}
 				
 				snprintf(buffer, sizeof(buffer),
 					"[%sChecks%s]:    check run failed for https://github.com/%s",
