@@ -13,6 +13,11 @@
 
 struct GlobalVariables *libglobals;
 
+static unsigned int processing_lint_event;
+static unsigned int processing_lint_event_timeout = 15;
+time_t processing_lint_event_start_time;
+time_t processing_lint_event_current_time;
+
 void Log(unsigned int direction, char *text) {
 	char *dirstr;
 	if (direction == LOCAL)
@@ -171,6 +176,37 @@ static const char *StripGithubApiPrefix(const char *url) {
 		return url + prefix_len;
 
 	return url;
+}
+
+// Thread to reset the lint check flag if there's no comment event.
+// It's mostly just a timeout action.
+void *ProcessLintEventCallback(void *argp) {
+	processing_lint_event = 1;
+	processing_lint_event_start_time = time(NULL);
+	
+	while (processing_lint_event) {
+		processing_lint_event_current_time = time(NULL);
+		if (processing_lint_event_current_time - processing_lint_event_start_time >=
+		  processing_lint_event_timeout)
+			break;
+		
+		sleep(1);
+	}
+	
+	processing_lint_event = 0;
+	
+	return NULL;
+}
+
+// Start the processing thread that makes sure the lint check flag is reset.
+void ProcessLintEventStart(void) {
+	pthread_t lint_thread;
+	pthread_attr_t attr;
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+	pthread_create(&lint_thread, &attr, ProcessLintEventCallback, NULL);
+	pthread_detach(lint_thread);
+	pthread_attr_destroy(&attr);
 }
 
 void ParseJsonData(char *json_data) {
@@ -444,52 +480,66 @@ void ParseJsonData(char *json_data) {
 	// Process check runs
 	json_t *check = json_object_get(root, "check_run");
 	if (check != NULL) {
-		json_t *check_status = json_object_get(check, "status");
-		if (check_status == NULL) {
+		json_t *name = json_object_get(check, "name");
+		if (name == NULL) {
 			json_decref(root);
 			return;
 		}
-		
-		json_t *check_conclusion = json_object_get(check, "conclusion");
-		if (check_conclusion == NULL) {
-			json_decref(root);
-			return;
+		if (strncmp(json_string_value(name), "lint", 4) == 0) {
+			json_t *check_conclusion = json_object_get(check, "conclusion");
+			if (check_conclusion == NULL) {
+				json_decref(root);
+				return;
+			}
+			if (strncmp(json_string_value(check_conclusion), "failure", 7) == 0) {
+				ProcessLintEventStart();
+				json_decref(root);
+				return;
+			}
 		}
-		
-		if (strncmp(json_string_value(check_status), "completed", 9) == 0 &&
-			strncmp(json_string_value(check_conclusion), "failure", 7) == 0) {
-			json_t *suite = json_object_get(check, "check_suite");
-			if (suite == NULL) {
+		else if (processing_lint_event && strncmp(json_string_value(name), "comment", 7) == 0) {
+			processing_lint_event = 0;
+			
+			json_t *check_status = json_object_get(check, "status");
+			if (check_status == NULL) {
 				json_decref(root);
 				return;
 			}
 			
-			json_t *prs = json_object_get(suite, "pull_requests");
-			if (prs == NULL) {
+			if (strncmp(json_string_value(check_status), "completed", 9) == 0) {
+				json_t *suite = json_object_get(check, "check_suite");
+				if (suite == NULL) {
+					json_decref(root);
+					return;
+				}
+				
+				json_t *prs = json_object_get(suite, "pull_requests");
+				if (prs == NULL) {
+					json_decref(root);
+					return;
+				}
+				
+				json_t *pr = json_array_get(prs, 0);
+				if (pr == NULL) {
+					json_decref(root);
+					return;
+				}
+				
+				json_t *pr_url = json_object_get(pr, "url");
+				if (pr_url == NULL) {
+					json_decref(root);
+					return;
+				}
+			
+				const char *url_path = StripGithubApiPrefix(json_string_value(pr_url));
+				
+				snprintf(buffer, sizeof(buffer),
+					"[%sChecks%s]:    check run failed for https://github.com/%s",
+					RED, NORMAL, url_path);
+				SendIrcMessage(buffer);
 				json_decref(root);
 				return;
 			}
-			
-			json_t *pr = json_array_get(prs, 0);
-			if (pr == NULL) {
-				json_decref(root);
-				return;
-			}
-			
-			json_t *pr_url = json_object_get(pr, "url");
-			if (pr_url == NULL) {
-				json_decref(root);
-				return;
-			}
-		
-			const char *url_path = StripGithubApiPrefix(json_string_value(pr_url));
-			
-			snprintf(buffer, sizeof(buffer),
-				"[%sChecks%s]:    check run failed for https://github.com/%s",
-				RED, NORMAL, url_path);
-			SendIrcMessage(buffer);
-			json_decref(root);
-			return;
 		}
 	}
 	
