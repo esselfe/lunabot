@@ -473,7 +473,7 @@ void ParseJsonData(char *json_data) {
 			}
 			
 			snprintf(buffer, sizeof(buffer),
-				"[%sChecks%s]: check run failed for %s",
+				"[%sChecks%s]:    check run failed for %s",
 				RED, NORMAL, json_string_value(pr_url));
 			SendIrcMessage(buffer);
 			json_decref(root);
