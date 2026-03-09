@@ -5,6 +5,8 @@
 #include <errno.h>
 #include <time.h>
 #include <sys/time.h>
+#include <stdatomic.h>
+#include <pthread.h>
 #include <openssl/ssl.h>
 #include <microhttpd.h>
 #include <jansson.h>
@@ -12,6 +14,12 @@
 #include "lunabot.h"
 
 struct GlobalVariables *libglobals;
+
+static atomic_uint processing_lint_event;
+static unsigned int processing_lint_event_timeout = 15;
+time_t processing_lint_event_start_time;
+time_t processing_lint_event_current_time;
+pthread_mutex_t processing_lint_event_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void Log(unsigned int direction, char *text) {
 	char *dirstr;
@@ -173,6 +181,42 @@ static const char *StripGithubApiPrefix(const char *url) {
 	return url;
 }
 
+// Thread to reset the lint check flag if there's no comment event.
+// It's mostly just a timeout action.
+void *ProcessLintEventCallback(void *argp) {
+	processing_lint_event_start_time = time(NULL);
+
+	while (processing_lint_event) {
+		processing_lint_event_current_time = time(NULL);
+		if (processing_lint_event_current_time - processing_lint_event_start_time >=
+		  processing_lint_event_timeout)
+			break;
+		
+		sleep(1);
+	}
+	
+	pthread_mutex_lock(&processing_lint_event_mutex);
+	processing_lint_event = 0;
+	pthread_mutex_unlock(&processing_lint_event_mutex);
+	
+	return NULL;
+}
+
+// Start the processing thread that makes sure the lint check flag is reset.
+void ProcessLintEventStart(void) {
+	pthread_mutex_lock(&processing_lint_event_mutex);
+	processing_lint_event = 1;
+	pthread_mutex_unlock(&processing_lint_event_mutex);
+	
+	pthread_t lint_thread;
+	pthread_attr_t attr;
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+	pthread_create(&lint_thread, &attr, ProcessLintEventCallback, NULL);
+	pthread_detach(lint_thread);
+	pthread_attr_destroy(&attr);
+}
+
 void ParseJsonData(char *json_data) {
 	if (libglobals->debug)
 		fprintf(stderr, "ParseJsonData() started\n");
@@ -224,7 +268,7 @@ void ParseJsonData(char *json_data) {
 		}
 		char *msg_text = SanitizeMessage(root, msg);
 		char *msg_text_limited = malloc(128);
-		if (msg_text == NULL) {
+		if (msg_text_limited == NULL) {
 			sprintf(buffer, "JSON parsing error: malloc() returned NULL!");
 			Log(LOCAL, buffer);
 			return;
@@ -444,52 +488,102 @@ void ParseJsonData(char *json_data) {
 	// Process check runs
 	json_t *check = json_object_get(root, "check_run");
 	if (check != NULL) {
-		json_t *check_status = json_object_get(check, "status");
-		if (check_status == NULL) {
+		json_t *name = json_object_get(check, "name");
+		if (name == NULL) {
 			json_decref(root);
 			return;
 		}
 		
-		json_t *check_conclusion = json_object_get(check, "conclusion");
-		if (check_conclusion == NULL) {
+		unsigned int processing_lint_event_copy;
+		pthread_mutex_lock(&processing_lint_event_mutex);
+		processing_lint_event_copy = processing_lint_event;
+		pthread_mutex_unlock(&processing_lint_event_mutex);
+		
+		if (json_is_string(name) &&
+		  strncmp(json_string_value(name), "lint", 4) == 0) {
+			json_t *check_conclusion = json_object_get(check, "conclusion");
+			if (check_conclusion == NULL) {
+				json_decref(root);
+				return;
+			}
+			
+			if (json_is_string(check_conclusion) &&
+			  strncmp(json_string_value(check_conclusion), "failure", 7) == 0) {
+			  	// This also sets 'processing_lint_event' to 1
+			  	// which should trigger pulling the PR URL in the next branch
+			  	// Note that in the event named "lint" there's no PR URL.
+				ProcessLintEventStart();
+				json_decref(root);
+				return;
+			}
+			
 			json_decref(root);
 			return;
 		}
-		
-		if (strncmp(json_string_value(check_status), "completed", 9) == 0 &&
-			strncmp(json_string_value(check_conclusion), "failure", 7) == 0) {
-			json_t *suite = json_object_get(check, "check_suite");
-			if (suite == NULL) {
+		else if (processing_lint_event_copy && json_is_string(name) &&
+		  strncmp(json_string_value(name), "comment", 7) == 0) {
+			pthread_mutex_lock(&processing_lint_event_mutex);
+			processing_lint_event = 0;
+			pthread_mutex_unlock(&processing_lint_event_mutex);
+			
+			json_t *check_status = json_object_get(check, "status");
+			if (check_status == NULL) {
 				json_decref(root);
 				return;
 			}
 			
-			json_t *prs = json_object_get(suite, "pull_requests");
-			if (prs == NULL) {
+			if (json_is_string(check_status) &&
+			  strncmp(json_string_value(check_status), "queued", 6) == 0) {
 				json_decref(root);
 				return;
 			}
+			else if (json_is_string(check_status) &&
+			  strncmp(json_string_value(check_status), "completed", 9) == 0) {
+				json_t *suite = json_object_get(check, "check_suite");
+				if (suite == NULL) {
+					json_decref(root);
+					return;
+				}
+				
+				json_t *prs = json_object_get(suite, "pull_requests");
+				if (prs == NULL) {
+					json_decref(root);
+					return;
+				}
+				
+				// Just triple check this one
+				if (!json_is_array(prs) || json_array_size(prs) == 0) {
+					json_decref(root);
+					return;
+				}
+				
+				json_t *pr = json_array_get(prs, 0);
+				if (pr == NULL) {
+					json_decref(root);
+					return;
+				}
+				
+				json_t *pr_url = json_object_get(pr, "url");
+				if (pr_url == NULL) {
+					json_decref(root);
+					return;
+				}
 			
-			json_t *pr = json_array_get(prs, 0);
-			if (pr == NULL) {
+				const char *url_path;
+				if (json_is_string(pr_url))
+					url_path = StripGithubApiPrefix(json_string_value(pr_url));
+				else  {
+					json_decref(root);
+					return;
+				}
+				
+				snprintf(buffer, sizeof(buffer),
+					"[%sChecks%s]:    check run failed for https://github.com/%s",
+					RED, NORMAL, url_path);
+				SendIrcMessage(buffer);
 				json_decref(root);
 				return;
 			}
-			
-			json_t *pr_url = json_object_get(pr, "url");
-			if (pr_url == NULL) {
-				json_decref(root);
-				return;
-			}
-		
-			const char *url_path = StripGithubApiPrefix(json_string_value(pr_url));
-			
-			snprintf(buffer, sizeof(buffer),
-				"[%sChecks%s]:    check run failed for https://github.com/%s",
-				RED, NORMAL, url_path);
-			SendIrcMessage(buffer);
-			json_decref(root);
-			return;
 		}
 	}
 	
@@ -545,6 +639,36 @@ void ParseJsonData(char *json_data) {
 	Log(LOCAL, "Got webhook data without a conditional branch for it!");
 
 	json_decref(root);
+}
+
+void ReplayJsonPayload(char *filename) {
+	FILE *fp = fopen(filename, "r");
+	if (fp == NULL) {
+		char buffer_tmp[1024];
+		sprintf(buffer_tmp, "ReplayJsonPayload() error: cannot open '%s': %s",
+			filename, strerror(errno));
+		Log(LOCAL, buffer_tmp);
+		return;
+	}
+	
+	fseek(fp, 0, SEEK_END);
+	unsigned long filesize = ftell(fp);
+	fseek(fp, 0, SEEK_SET);
+	
+	char *payload = malloc(filesize + 1);
+	memset(payload, 0, filesize + 1);
+	if (payload == NULL) {
+		Log(LOCAL, "ReplayJsonPayload() error: cannot allocate memory!");
+		fclose(fp);
+		return;
+	}
+	
+	int ret = fread(payload, filesize, 1, fp);
+	if (ret > 0)
+		ParseJsonData(payload);
+	
+	free(payload);
+	fclose(fp);
 }
 
 void *HealthCheckTimeoutFunc(void *argp) {

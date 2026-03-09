@@ -22,7 +22,7 @@
 
 #include "lunabot.h"
 
-const char *lunabot_version_string = "0.5.5";
+const char *lunabot_version_string = "0.5.4";
 
 struct GlobalVariables globals, **globals_ptr;
 char buffer[BUFFER_SIZE];
@@ -55,6 +55,7 @@ void (*Log_fp)(unsigned int direction, char *text);
 struct RawLine *(*ParseRawLine_fp)(char *line);
 void (*FreeRawLine_fp)(struct RawLine *rawp);
 void (*SendIrcMessage_fp)(const char *message);
+void (*ReplayJsonPayload_fp)(char *filename);
 void (*liblunabotInit_fp)(void);
 
 void ReloadLibrary(void) {
@@ -121,6 +122,15 @@ void ReloadLibrary(void) {
 	if (SendIrcMessage_fp == NULL) {
 		fprintf(stderr,
 			"lunabot::ReloadLibrary() error: Cannot load SendIrcMessage(): %s\n",
+			dlerror());
+		dlclose(handle);
+		exit(1);
+	}
+	
+	*(void **)(&ReplayJsonPayload_fp) = dlsym(handle, "ReplayJsonPayload");
+	if (ReplayJsonPayload_fp == NULL) {
+		fprintf(stderr,
+			"lunabot::ReloadLibrary() error: Cannot load ReplayJsonPayload(): %s\n",
 			dlerror());
 		dlclose(handle);
 		exit(1);
@@ -288,13 +298,13 @@ void *IrcConnect(void *arg) {
 		else
 			Log_fp(IN, buffer);
 		
-		struct RawLine *raw = ParseRawLine_fp(buffer);
+		/* struct RawLine *raw = ParseRawLine_fp(buffer);
 		if (raw != NULL) {
 			if (strcmp(raw->command, "PONG") == 0)
 				Log_fp(LOCAL, "Got a pong from the server!");
 
 			FreeRawLine_fp(raw);
-		}
+		} */
 	}
 
 	close(globals.irc_sock);
@@ -336,6 +346,10 @@ void *ConsoleReadLoop(void *argp) {
 			ReloadLibrary();
 			
 			liblunabotInit_fp();
+		}
+		else if (strncmp(buffer_line, "replay", 6) == 0) {
+			if (strlen(buffer_line) >= 8)
+				ReplayJsonPayload_fp(buffer_line + 7);
 		}
 		else if (strlen(buffer_line) > 0 && *buffer_line != '\n') {
 			Log_fp(OUT, buffer_line);
