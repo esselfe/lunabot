@@ -16,7 +16,7 @@
 struct GlobalVariables *libglobals;
 
 static atomic_uint processing_lint_event;
-static unsigned int processing_lint_event_timeout = 15;
+static unsigned int processing_lint_event_timeout = 60;
 time_t processing_lint_event_start_time;
 time_t processing_lint_event_current_time;
 pthread_mutex_t processing_lint_event_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -510,8 +510,8 @@ void ParseJsonData(char *json_data) {
 			if (json_is_string(check_conclusion) &&
 			  strncmp(json_string_value(check_conclusion), "failure", 7) == 0) {
 			  	// This also sets 'processing_lint_event' to 1
-			  	// which should trigger pulling the PR URL in the next branch
-			  	// Note that in the event named "lint" there's no PR URL.
+			  	// which should trigger pulling the PR URL in the next conditional
+			  	// Note that in the event named "lint", there's no PR URL.
 				ProcessLintEventStart();
 				json_decref(root);
 				return;
@@ -522,10 +522,6 @@ void ParseJsonData(char *json_data) {
 		}
 		else if (processing_lint_event_copy && json_is_string(name) &&
 		  strncmp(json_string_value(name), "comment", 7) == 0) {
-			pthread_mutex_lock(&processing_lint_event_mutex);
-			processing_lint_event = 0;
-			pthread_mutex_unlock(&processing_lint_event_mutex);
-			
 			json_t *check_status = json_object_get(check, "status");
 			if (check_status == NULL) {
 				json_decref(root);
@@ -539,6 +535,10 @@ void ParseJsonData(char *json_data) {
 			}
 			else if (json_is_string(check_status) &&
 			  strncmp(json_string_value(check_status), "completed", 9) == 0) {
+			  	pthread_mutex_lock(&processing_lint_event_mutex);
+				processing_lint_event = 0;
+				pthread_mutex_unlock(&processing_lint_event_mutex);
+				
 				json_t *suite = json_object_get(check, "check_suite");
 				if (suite == NULL) {
 					json_decref(root);
