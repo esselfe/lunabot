@@ -1,0 +1,13 @@
+{
+    "debug": true,
+    "nick": "lunabot",
+    "channel": "#test-lunabot",
+    "webhook_port": 3000,
+    "ignore_labels": false,
+    "ignore_pending": false,
+    "ignore_commits": false,
+    "only_core_labels": false,
+    "ci_context_name": "continuous-integration/jenkins/branch",
+    "log_filename": "/tmp/lunabot.log",
+    "health_check_wait": 5
+}

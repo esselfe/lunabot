@@ -1,0 +1,41 @@
+# Multi-stage build for lunabot and the IRC observer client
+# Build stage
+FROM debian:bookworm AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential autoconf automake libtool pkg-config \
+    libmicrohttpd-dev libjansson-dev libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY . /build
+WORKDIR /build
+
+RUN ./autogen.sh && ./configure && make
+RUN cd test/observer && make
+
+# Runtime stage
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libmicrohttpd12 libjansson4 libssl3 openssl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy lunabot binary and library (dlopen expects ./src/.libs/liblunabot.so)
+COPY --from=builder /build/src/lunabot /app/lunabot
+COPY --from=builder /build/src/.libs/liblunabot.so /app/src/.libs/liblunabot.so
+
+# Copy observer binary
+COPY --from=builder /build/test/observer/observer /app/observer
+
+# Copy test config and credentials
+COPY test/lunabot.conf.json /app/lunabot.conf.json
+COPY test/.secret /app/.secret
+COPY test/.passwd /app/.passwd
+
+# Copy the self-signed TLS cert so lunabot trusts the Ergo server.
+# SSL_set1_host() performs hostname verification; adding our CA cert
+# to the system trust store satisfies this.
+COPY test/ergo/fullchain.pem /usr/local/share/ca-certificates/ergo-test.crt
+RUN update-ca-certificates
