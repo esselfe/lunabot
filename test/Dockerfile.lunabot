@@ -4,7 +4,7 @@ FROM debian:bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential autoconf automake autoconf-archive libtool pkg-config \
-    libmicrohttpd-dev libjansson-dev libssl-dev \
+    libmicrohttpd-dev libjansson-dev libssl-dev libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . /build
@@ -17,7 +17,7 @@ RUN cd test/observer && make
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libmicrohttpd12 libjansson4 libssl3 openssl ca-certificates \
+    libmicrohttpd12 libjansson4 libssl3 libcurl4 openssl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
