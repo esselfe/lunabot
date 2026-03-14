@@ -199,21 +199,18 @@ static size_t CurlWriteCallback(void *contents, size_t size, size_t nmemb,
 	return realsize;
 }
 
-static char *FetchPullRequestTitle(const char *repo_full_name, int pr_number) {
-	char url[BUFFER_SIZE];
-	snprintf(url, sizeof(url),
-		"https://api.github.com/repos/%s/pulls/%d",
-		repo_full_name, pr_number);
-
+// Fetch a URL from the GitHub API. Returns parsed JSON or NULL on failure.
+// Caller must call json_decref() on the returned object.
+static json_t *FetchGithubApi(const char *url) {
 	CURL *curl = curl_easy_init();
 	if (curl == NULL) {
-		Log(LOCAL, "FetchPullRequestTitle: curl_easy_init failed");
+		Log(LOCAL, "FetchGithubApi: curl_easy_init failed");
 		return NULL;
 	}
 
 	struct CurlBuffer response = { .data = malloc(1), .size = 0 };
 	if (response.data == NULL) {
-		Log(LOCAL, "FetchPullRequestTitle: malloc failed");
+		Log(LOCAL, "FetchGithubApi: malloc failed");
 		curl_easy_cleanup(curl);
 		return NULL;
 	}
@@ -229,8 +226,8 @@ static char *FetchPullRequestTitle(const char *repo_full_name, int pr_number) {
 	if (res != CURLE_OK) {
 		char errbuf[BUFFER_SIZE];
 		snprintf(errbuf, sizeof(errbuf),
-			"FetchPullRequestTitle: curl error: %s",
-			curl_easy_strerror(res));
+			"FetchGithubApi: curl error for %s: %s",
+			url, curl_easy_strerror(res));
 		Log(LOCAL, errbuf);
 		free(response.data);
 		curl_easy_cleanup(curl);
@@ -247,11 +244,24 @@ static char *FetchPullRequestTitle(const char *repo_full_name, int pr_number) {
 	if (!root) {
 		char errbuf[BUFFER_SIZE];
 		snprintf(errbuf, sizeof(errbuf),
-			"FetchPullRequestTitle: JSON parse error: %s",
+			"FetchGithubApi: JSON parse error: %s",
 			error.text);
 		Log(LOCAL, errbuf);
 		return NULL;
 	}
+
+	return root;
+}
+
+static char *FetchPullRequestTitle(const char *repo_full_name, int pr_number) {
+	char url[BUFFER_SIZE];
+	snprintf(url, sizeof(url),
+		"https://api.github.com/repos/%s/pulls/%d",
+		repo_full_name, pr_number);
+
+	json_t *root = FetchGithubApi(url);
+	if (!root)
+		return NULL;
 
 	json_t *title = json_object_get(root, "title");
 	if (!json_is_string(title)) {
@@ -264,6 +274,46 @@ static char *FetchPullRequestTitle(const char *repo_full_name, int pr_number) {
 	json_decref(root);
 
 	return title_text;
+}
+
+// Look up PR number and title by commit SHA using the GitHub API.
+// GET /repos/{owner}/{repo}/commits/{sha}/pulls returns an array of PRs.
+// Sets *out_number and *out_title on success. Caller must free *out_title.
+// Returns 0 on success, 1 on failure.
+static int FetchPullRequestBySha(const char *repo_full_name,
+  const char *head_sha, int *out_number, char **out_title) {
+	char url[BUFFER_SIZE];
+	snprintf(url, sizeof(url),
+		"https://api.github.com/repos/%s/commits/%s/pulls",
+		repo_full_name, head_sha);
+
+	json_t *root = FetchGithubApi(url);
+	if (!root)
+		return 1;
+
+	if (!json_is_array(root) || json_array_size(root) == 0) {
+		Log(LOCAL, "FetchPullRequestBySha: no PRs found for SHA");
+		json_decref(root);
+		return 1;
+	}
+
+	json_t *pr = json_array_get(root, 0);
+	json_t *number = json_object_get(pr, "number");
+	json_t *title = json_object_get(pr, "title");
+
+	if (!json_is_integer(number)) {
+		json_decref(root);
+		return 1;
+	}
+
+	*out_number = json_integer_value(number);
+	*out_title = NULL;
+
+	if (json_is_string(title))
+		*out_title = SanitizeMessage(root, title);
+
+	json_decref(root);
+	return 0;
 }
 
 void ParseJsonData(char *json_data) {
@@ -565,6 +615,15 @@ void ParseJsonData(char *json_data) {
 		const char *conclusion = json_string_value(check_conclusion);
 		json_t *html_url = json_object_get(check, "html_url");
 
+		// Get repo full name from repository.full_name
+		const char *repo_full_name = NULL;
+		json_t *repo = json_object_get(root, "repository");
+		if (json_is_object(repo)) {
+			json_t *fn = json_object_get(repo, "full_name");
+			if (json_is_string(fn))
+				repo_full_name = json_string_value(fn);
+		}
+
 		// Extract PR number from check_run.pull_requests[0].number
 		int pr_number = 0;
 		json_t *prs = json_object_get(check, "pull_requests");
@@ -575,18 +634,21 @@ void ParseJsonData(char *json_data) {
 				pr_number = json_integer_value(pr_num);
 		}
 
-		// Get repo full name from repository.full_name
-		const char *repo_full_name = NULL;
-		json_t *repo = json_object_get(root, "repository");
-		if (json_is_object(repo)) {
-			json_t *fn = json_object_get(repo, "full_name");
-			if (json_is_string(fn))
-				repo_full_name = json_string_value(fn);
-		}
-
 		// Fetch PR title from GitHub API (may return NULL)
 		char *pr_title = NULL;
-		if (pr_number > 0 && repo_full_name != NULL)
+
+		// If pull_requests[] is empty (common with fork PRs),
+		// look up the PR by commit SHA via the GitHub API
+		if (pr_number == 0 && repo_full_name != NULL) {
+			json_t *head_sha = json_object_get(check, "head_sha");
+			if (json_is_string(head_sha)) {
+				FetchPullRequestBySha(repo_full_name,
+					json_string_value(head_sha),
+					&pr_number, &pr_title);
+			}
+		}
+
+		if (pr_number > 0 && pr_title == NULL && repo_full_name != NULL)
 			pr_title = FetchPullRequestTitle(repo_full_name, pr_number);
 
 		if (strcmp(conclusion, "failure") == 0) {
