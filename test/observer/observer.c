@@ -41,31 +41,37 @@ struct ObserverConfig {
     int timeout_secs;
 };
 
+struct IrcConn {
+    SSL *ssl;
+    int sock;
+    int use_tls;
+};
+
 /* Write a string to the IRC connection (SSL or plain) */
-static int irc_write(SSL *ssl, int sock, const char *data, int use_tls) {
+static int irc_write(struct IrcConn *conn, const char *data) {
     size_t len = strlen(data);
-    if (use_tls)
-        return SSL_write(ssl, data, (int)len);
+    if (conn->use_tls)
+        return SSL_write(conn->ssl, data, (int)len);
     else
-        return (int)send(sock, data, len, 0);
+        return (int)send(conn->sock, data, len, 0);
 }
 
 /* Read from the IRC connection into buf, return bytes read */
-static int irc_read(SSL *ssl, int sock, char *buf, int bufsize, int use_tls) {
-    if (use_tls)
-        return SSL_read(ssl, buf, bufsize);
+static int irc_read(struct IrcConn *conn, char *buf, int bufsize) {
+    if (conn->use_tls)
+        return SSL_read(conn->ssl, buf, bufsize);
     else
-        return (int)recv(sock, buf, (size_t)bufsize, 0);
+        return (int)recv(conn->sock, buf, (size_t)bufsize, 0);
 }
 
 /* Extract PRIVMSG text from a line like ":nick!user@host PRIVMSG #channel :text" */
 static void handle_line(const char *line, const char *channel,
-                        SSL *ssl, int sock, int use_tls) {
+                        struct IrcConn *conn) {
     /* Handle PING */
     if (strncmp(line, "PING ", 5) == 0) {
         char pong[LINE_BUF_SIZE];
         snprintf(pong, sizeof(pong), "PONG %s\r\n", line + 5);
-        irc_write(ssl, sock, pong, use_tls);
+        irc_write(conn, pong);
         return;
     }
 
@@ -175,7 +181,7 @@ static int setup_tls(int sock, SSL_CTX **out_ctx, SSL **out_ssl) {
 static void process_received_data(const char *readbuf, int bytes,
                                    char *linebuf, int *line_pos,
                                    int *joined, const char *channel,
-                                   SSL *ssl, int sock, int use_tls) {
+                                   struct IrcConn *conn) {
     char cmd[LINE_BUF_SIZE];
     for (int i = 0; i < bytes; i++) {
         if (readbuf[i] == '\r')
@@ -189,17 +195,17 @@ static void process_received_data(const char *readbuf, int bytes,
         if (*line_pos > 0) {
             if (!*joined && strstr(linebuf, " 001 ")) {
                 snprintf(cmd, sizeof(cmd), "JOIN %s\r\n", channel);
-                irc_write(ssl, sock, cmd, use_tls);
+                irc_write(conn, cmd);
                 *joined = 1;
                 fprintf(stderr, "observer: joining %s\n", channel);
             }
-            handle_line(linebuf, channel, ssl, sock, use_tls);
+            handle_line(linebuf, channel, conn);
         }
         *line_pos = 0;
     }
 }
 
-static void irc_read_loop(SSL *ssl, int sock, int use_tls,
+static void irc_read_loop(struct IrcConn *conn,
                            const char *channel, int timeout_secs) {
     char readbuf[LINE_BUF_SIZE];
     char linebuf[LINE_BUF_SIZE];
@@ -208,7 +214,7 @@ static void irc_read_loop(SSL *ssl, int sock, int use_tls,
     time_t start_time = time(NULL);
 
     struct pollfd pfd;
-    pfd.fd = sock;
+    pfd.fd = conn->sock;
     pfd.events = POLLIN;
 
     while (running) {
@@ -225,7 +231,7 @@ static void irc_read_loop(SSL *ssl, int sock, int use_tls,
         }
         if (poll_ret == 0) continue;
 
-        int bytes = irc_read(ssl, sock, readbuf, sizeof(readbuf) - 1, use_tls);
+        int bytes = irc_read(conn, readbuf, sizeof(readbuf) - 1);
         if (bytes <= 0) {
             fprintf(stderr, "observer: connection closed\n");
             return;
@@ -233,7 +239,7 @@ static void irc_read_loop(SSL *ssl, int sock, int use_tls,
         readbuf[bytes] = '\0';
 
         process_received_data(readbuf, bytes, linebuf, &line_pos,
-                              &joined, channel, ssl, sock, use_tls);
+                              &joined, channel, conn);
     }
 }
 
@@ -263,16 +269,18 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    struct IrcConn conn = { .ssl = ssl, .sock = sock, .use_tls = cfg.use_tls };
+
     char cmd[LINE_BUF_SIZE];
     snprintf(cmd, sizeof(cmd), "NICK %s\r\n", cfg.nick);
-    irc_write(ssl, sock, cmd, cfg.use_tls);
+    irc_write(&conn, cmd);
 
     snprintf(cmd, sizeof(cmd), "USER %s 0 * :Test Observer\r\n", cfg.nick);
-    irc_write(ssl, sock, cmd, cfg.use_tls);
+    irc_write(&conn, cmd);
 
-    irc_read_loop(ssl, sock, cfg.use_tls, cfg.channel, cfg.timeout_secs);
+    irc_read_loop(&conn, cfg.channel, cfg.timeout_secs);
 
-    irc_write(ssl, sock, "QUIT :done\r\n", cfg.use_tls);
+    irc_write(&conn, "QUIT :done\r\n");
 
     if (cfg.use_tls && ssl) {
         SSL_shutdown(ssl);
