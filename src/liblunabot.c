@@ -277,27 +277,48 @@ static char *FetchPullRequestTitle(const char *repo_full_name, int pr_number) {
 }
 
 // Look up PR number and title by commit SHA using the GitHub API.
-// GET /repos/{owner}/{repo}/commits/{sha}/pulls returns an array of PRs.
+// Tries GET /repos/{owner}/{repo}/commits/{sha}/pulls first, then
+// falls back to the search API (needed for fork PRs where the
+// commits endpoint returns an empty array).
 // Sets *out_number and *out_title on success. Caller must free *out_title.
 // Returns 0 on success, 1 on failure.
 static int FetchPullRequestBySha(const char *repo_full_name,
   const char *head_sha, int *out_number, char **out_title) {
 	char url[BUFFER_SIZE];
+	json_t *root = NULL;
+	json_t *pr = NULL;
+
+	// Try commits/{sha}/pulls first (works for non-fork PRs)
 	snprintf(url, sizeof(url),
 		"https://api.github.com/repos/%s/commits/%s/pulls",
 		repo_full_name, head_sha);
 
-	json_t *root = FetchGithubApi(url);
-	if (!root)
-		return 1;
+	root = FetchGithubApi(url);
+	if (root && json_is_array(root) && json_array_size(root) > 0) {
+		pr = json_array_get(root, 0);
+	} else {
+		if (root)
+			json_decref(root);
 
-	if (!json_is_array(root) || json_array_size(root) == 0) {
-		Log(LOCAL, "FetchPullRequestBySha: no PRs found for SHA");
-		json_decref(root);
-		return 1;
+		// Fallback: search API (needed for fork PRs)
+		snprintf(url, sizeof(url),
+			"https://api.github.com/search/issues"
+			"?q=repo:%s+type:pr+SHA:%s",
+			repo_full_name, head_sha);
+
+		root = FetchGithubApi(url);
+		if (!root)
+			return 1;
+
+		json_t *items = json_object_get(root, "items");
+		if (!json_is_array(items) || json_array_size(items) == 0) {
+			Log(LOCAL, "FetchPullRequestBySha: no PRs found for SHA");
+			json_decref(root);
+			return 1;
+		}
+		pr = json_array_get(items, 0);
 	}
 
-	json_t *pr = json_array_get(root, 0);
 	json_t *number = json_object_get(pr, "number");
 	json_t *title = json_object_get(pr, "title");
 
