@@ -62,7 +62,19 @@ void ReloadLibrary(void) {
 	if (handle != NULL)
 		dlclose(handle);
 
-	handle = dlopen("./liblunabot.so", RTLD_LAZY);
+	// Try the libtool development build path first (where libtool places
+	// the .so during in-tree builds), then fall back to the bare name so
+	// the system dynamic linker can resolve it via ld.so.conf for installed
+	// deployments.
+	handle = dlopen("./src/.libs/liblunabot.so", RTLD_LAZY);
+	if (handle != NULL) {
+		fprintf(stderr, "lunabot::ReloadLibrary() loaded ./src/.libs/liblunabot.so\n");
+	} else {
+		handle = dlopen("liblunabot.so", RTLD_LAZY);
+		if (handle != NULL) {
+			fprintf(stderr, "lunabot::ReloadLibrary() loaded liblunabot.so (system path)\n");
+		}
+	}
 	if (handle == NULL) {
 		fprintf(stderr,
 			"lunabot::ReloadLibrary() error: Cannot load liblunabot.so: %s\n",
