@@ -6,8 +6,12 @@ Lunabot is a C IRC bot (GPLv3, author: Stephane Fontaine) that relays GitHub web
 
 **Version:** 0.5.6
 **Language:** C (C17 standard)
-**Build system:** GNU Make
-**Dependencies:** gcc, libmicrohttpd, jansson, openssl, pthread
+**Build system:** Autotools (autoconf/automake/libtool)
+**Dependencies:** gcc, libmicrohttpd, jansson, openssl, libcurl, pthread
+
+**Contributors:**
+- Stephane Fontaine (esselfe) — original author
+- Stefan Wold (Ratler) — autotools build system, integration test infrastructure, check run refactor, GitHub API integration, SonarCloud quality fixes
 
 ---
 
@@ -26,10 +30,12 @@ The split is intentional: the library can be reloaded at runtime without restart
 
 ### `src/lunabot.h`
 Defines shared data structures and constants:
-- `struct GlobalVariables` — single global state struct holding all runtime config (IRC connection, SSL pointer, webhook port, flags, etc.)
+- `struct IrcConfig` — IRC-specific fields: `irc_server_hostname`, `irc_server_ip`, `irc_server_port`, `irc_sock`. Embedded as `irc` inside `GlobalVariables`.
+- `struct GlobalVariables` — single global state struct holding all runtime config (IRC connection via `irc`, SSL pointer, webhook port, flags, etc.)
 - `struct RawLine` — parsed IRC message fields (nick, username, host, command, channel, text)
 - IRC color code defines (`GREEN`, `RED`, `CYAN`, etc.) using mIRC color format (`\003NN`)
 - Log direction constants: `LOCAL` (internal), `IN` (received), `OUT` (sent)
+- `DEFAULT_CONTEXT_NAME` defaults to `"default"`
 
 ### `src/lunabot.c` — Main Program
 Startup, configuration, IRC connection, console loop.
@@ -44,7 +50,7 @@ Startup, configuration, IRC connection, console loop.
 7. Main loop: monitors `irc_connected`; if disconnected, calls `IrcConnectStart()`
 
 **`ReloadLibrary()`:**
-Calls `dlclose()` on the old handle, then `dlopen("./liblunabot.so", ...)`. Re-resolves all 6 function pointers: `Log`, `FreeRawLine`, `ParseRawLine`, `SendIrcMessage`, `ReplayJsonPayload`, `liblunabotInit`. Also links the main program's `globals` struct into the library via the exported `libglobals` pointer.
+Calls `dlclose()` on the old handle, then tries `dlopen("./src/.libs/liblunabot.so", ...)` first (libtool in-tree build path), falling back to `dlopen("liblunabot.so", ...)` for installed deployments. Re-resolves all 6 function pointers: `Log`, `FreeRawLine`, `ParseRawLine`, `SendIrcMessage`, `ReplayJsonPayload`, `liblunabotInit`. Also links the main program's `globals` struct into the library via the exported `libglobals` pointer.
 
 **`IrcConnect()` (thread):**
 - Creates a TCP socket, resolves the IRC server hostname via `getaddrinfo()`
@@ -54,6 +60,7 @@ Calls `dlclose()` on the old handle, then `dlopen("./liblunabot.so", ...)`. Re-r
 - Joins the configured channel
 - Enters a read loop: handles `PING` → `PONG` internally; logs everything else via `Log_fp()`
 - On disconnect, sets `globals.irc_connected = 0` (main loop will reconnect)
+- IRC fields accessed via `globals.irc.*` (the nested `struct IrcConfig`)
 
 **`ConsoleReadLoop()` (thread):**
 Reads stdin line by line:
@@ -64,12 +71,12 @@ Reads stdin line by line:
 
 **`ParseConfig()`:** Reads `lunabot.conf.json`. All fields are optional; missing fields fall back to defaults.
 
-**`GetIP()`:** Resolves a hostname to IPv4 using `getaddrinfo()`, stores result in `globals.irc_server_ip`.
+**`GetIP()`:** Resolves a hostname to IPv4 using `getaddrinfo()`, stores result in `globals.irc.irc_server_ip`.
 
 ---
 
 ### `src/liblunabot.c` — Shared Library
-All webhook processing, IRC message sending, health checks, and IRC line parsing.
+All webhook processing, IRC message sending, health checks, GitHub API calls, and IRC line parsing.
 
 **`libglobals`:** A pointer to the main program's `globals` struct, set by `ReloadLibrary()` on each load.
 
@@ -88,6 +95,15 @@ Extracts a JSON string value and replaces control characters (`\n`, `\r`, `\a`, 
 **`StripGithubApiPrefix(url)`:**
 Strips `https://api.github.com/repos/` prefix from URLs, leaving the `owner/repo/...` path for constructing `https://github.com/` URLs.
 
+**GitHub API helpers (libcurl-based):**
+- `CurlWriteCallback()` / `struct CurlBuffer` — accumulates HTTP response data for libcurl.
+- `FetchGithubApi(url)` — performs a GET request to the GitHub API, returns parsed jansson JSON. Caller must `json_decref()` the result.
+- `FetchPullRequestTitle(repo_full_name, pr_number)` — fetches PR title from `GET /repos/{owner}/{repo}/pulls/{number}`.
+- `FetchPullRequestBySha(repo_full_name, head_sha, &out_number, &out_title)` — looks up a PR by commit SHA. Tries `GET /repos/{owner}/{repo}/commits/{sha}/pulls` first; falls back to the search API (`GET /search/issues?q=repo:...+type:pr+SHA:...`) for fork PRs where the commits endpoint returns an empty array. Sets `out_number` and `out_title` (caller must free). Returns 0 on success.
+
+**`ShouldSkipLabelEvent(root)`:**
+Helper that returns 1 (skip) if `ignore_labels` is set, or if `only_core_labels` is set and the event's `repository.name` is not `moonbase-core`. Returns 0 to process.
+
 **`ParseJsonData(json_data)`:**
 The main webhook event dispatcher. Parses the JSON payload and handles four event categories:
 
@@ -97,15 +113,18 @@ The main webhook event dispatcher. Parses the JSON payload and handles four even
    - Formats IRC messages for `pending` (yellow, optionally skipped), `success` (green), `failure`/`error` (red)
 
 2. **Pull request events** (payload has `"action"` + `"pull_request"` fields):
-   - `labeled` / `unlabeled`: Posts label add/remove notifications; can filter to `only_core_labels` (moonbase-core repo only) or skip all via `ignore_labels`
+   - `labeled` / `unlabeled`: Posts label add/remove notifications; filtered via `ShouldSkipLabelEvent()`
    - `opened`: Posts new PR notification with title, author, URL
    - `closed`: Posts either "Merged PR" (cyan) or "Closed PR" (red) depending on the `merged` field
 
 3. **Check run events** (payload has `"check_run"` field):
-   - A two-stage mechanism with a 60-second timeout flag (`processing_lint_event`):
-     - Stage 1: A `lint` check run with `conclusion: "failure"` sets `processing_lint_event = 1` and starts a timeout thread
-     - Stage 2: When `processing_lint_event` is set and a `comment` check run with `status: "completed"` arrives, it extracts the PR URL from `check_suite.pull_requests[0].url` and posts a "check run failed" IRC message
-   - This two-stage design is needed because the `lint` event itself does not contain a PR URL; the URL comes in a subsequent `comment` event
+   - Handles only `lint` check runs with `status: "completed"`
+   - Extracts `pr_number` from `check_run.pull_requests[0].number` if present
+   - If `pull_requests[]` is empty (fork PRs), calls `FetchPullRequestBySha()` using `check_run.head_sha`
+   - If `pr_number` is known but title is not yet fetched, calls `FetchPullRequestTitle()`
+   - Reports `failure` (red) as "lint failed for PR #N 'title' - URL | check_url"
+   - Reports `success` (green) as "lint passed for PR #N 'title' - URL"
+   - Falls back to a simpler message without PR details if lookup fails
 
 4. **Push commit events** (payload has `"refs"` + `"commits"` fields):
    - Only processed if `ignore_commits` is false and ref is `refs/head/master`
@@ -126,13 +145,10 @@ Parses IRC protocol lines in the format `:nick!~user@host COMMAND #channel :text
 - Skips NickServ/ChanServ messages, PING, ERROR, numeric server replies, MODE, NOTICE
 - Detects `PONG` replies and sets `health_check = 2` (signals the health check poller)
 - Returns a heap-allocated `struct RawLine` (caller must free with `FreeRawLine()`)
-- Note: `ParseRawLine` is defined in the library but currently commented out in the IRC read loop in `lunabot.c`
+- Note: `ParseRawLine` is defined in the library but currently not called in the IRC read loop in `lunabot.c`
 
 **`liblunabotInit()`:**
 Stops any running MHD daemon, starts a new one on `webhook_port`. Called at startup and on `reload`. Initializes `health_check_tprev` so the first health check is immediately available.
-
-**Lint event threading (`ProcessLintEventCallback`, `ProcessLintEventStart`):**
-A detached thread that watches `processing_lint_event`. If it doesn't get cleared (by receiving the `comment` check run event) within 60 seconds, it clears the flag itself. Uses `pthread_mutex_t` for safe atomic access alongside `atomic_uint`.
 
 ---
 
@@ -153,7 +169,7 @@ A detached thread that watches `processing_lint_event`. If it doesn't get cleare
 | `ignore_pending` | true | Suppress CI "pending" status events |
 | `ignore_commits` | true | Suppress push commit events |
 | `webhook_port` | 3000 | HTTP port for webhook listener |
-| `ci_context_name` | `continuous-integration/jenkins/pr-head` | CI context string to match |
+| `ci_context_name` | `default` | CI context string to match |
 
 **CLI flags** override config values: `--debug/-d`, `--channel/-c`, `--nick/-n`, `--irc-port/-p`, `--irc-server/-s`, `--webhook-port/-w`, `--log/-l`, `--context/-C`.
 
@@ -165,12 +181,48 @@ A detached thread that watches `processing_lint_event`. If it doesn't get cleare
 
 ## Build
 
+The project uses autotools. Run `autogen.sh` once to generate the build system, then configure and build normally:
+
 ```sh
-make          # builds liblunabot.so and lunabot
-make clean    # removes obj/, liblunabot.so, lunabot
+./autogen.sh       # generate configure script (requires autoconf, automake, libtool)
+./configure        # detect dependencies via pkg-config
+make               # builds src/.libs/liblunabot.so and lunabot
+make clean         # remove build artifacts
+make maintainer-clean  # remove all autotools-generated files too
 ```
 
-The binary links against: `-lpthread -lmicrohttpd -ljansson -lssl -lcrypto -ldl`
+The old hand-written Makefile is preserved as `Makefile.simple` for reference.
+
+The library is built into `src/.libs/liblunabot.so` by libtool during in-tree builds. `ReloadLibrary()` tries that path first, then falls back to the bare name for installed deployments.
+
+The binary links against: `-lpthread -lmicrohttpd -ljansson -lssl -lcrypto -lcurl -ldl`
+
+---
+
+## Integration Tests
+
+The `test/` directory contains a full Docker-based integration test environment added by Stefan Wold.
+
+**Components:**
+- `test/Dockerfile.lunabot` — multi-stage Docker build for lunabot
+- `test/Dockerfile.ergo` — Ergo IRC server container
+- `test/ergo/ircd.yaml` — Ergo IRC server configuration
+- `test/ergo/generate-certs.sh` — generates TLS certs for Ergo
+- `test/docker-compose.yml` — orchestrates lunabot + Ergo + observer containers
+- `test/observer/observer.c` — C IRC client that joins the channel and prints all PRIVMSG to stdout; used by the test runner to capture lunabot's output
+- `test/run-tests.sh` — shell test runner: sends HMAC-signed webhook payloads via curl and asserts expected substrings appear in the observer's IRC output within a timeout
+
+**Running tests:**
+```sh
+make test           # build then run integration tests (requires Docker with compose plugin)
+make test-clean     # tear down test containers and volumes
+```
+
+Pass `-v` / `--verbose` to `run-tests.sh` directly to dump the captured IRC output after the run (mIRC color codes are stripped for readability).
+
+**Test payloads** live in `test/payloads/` (JSON files for each webhook event type). The runner signs each with HMAC-SHA256 using the test secret and POSTs them to lunabot, then polls the observer log for expected IRC message substrings.
+
+The observer supports both TLS and plain IRC connections (`--tls` / `--no-tls` flags) and exits after a configurable timeout.
 
 ---
 
