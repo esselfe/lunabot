@@ -7,9 +7,16 @@
 #
 # Prerequisites: Docker (with compose plugin), openssl, curl
 #
-# Usage: bash test/run-tests.sh
+# Usage: bash test/run-tests.sh [-v|--verbose]
 #
 set -euo pipefail
+
+VERBOSE=0
+for arg in "$@"; do
+    case "$arg" in
+        -v|--verbose) VERBOSE=1 ;;
+    esac
+done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -84,6 +91,17 @@ assert_output() {
 capture_observer_output() {
     docker compose -f "$COMPOSE_FILE" logs --follow --no-log-prefix observer > "$OBSERVER_LOG" 2>&1 &
     OBSERVER_PID=$!
+}
+
+# In verbose mode, dump the observer log (IRC output) to the console
+dump_observer_log() {
+    if [ "$VERBOSE" -eq 1 ]; then
+        echo ""
+        echo "=== IRC output (observer log) ==="
+        # Strip mIRC color codes (\x03 + up to 2 digits) for readability
+        cat "$OBSERVER_LOG" 2>/dev/null | perl -pe 's/\x03(\d{1,2}(,\d{1,2})?)?//g' || true
+        echo "=== end IRC output ==="
+    fi
 }
 
 echo "=== Lunabot Integration Tests ==="
@@ -200,5 +218,7 @@ else
     echo "  FAIL: Check run lint success (HTTP $HTTP_STATUS, expected 200)"
     FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
+
+dump_observer_log
 
 echo ""
