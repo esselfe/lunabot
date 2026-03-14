@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile.ergo
     healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 6697"]
+      test: ["CMD-SHELL", "nc -z localhost 6667 || nc -z localhost 6697"]
       interval: 2s
       timeout: 5s
       retries: 10

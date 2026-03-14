@@ -126,19 +126,23 @@ echo ""
 echo "=== Running Tests ==="
 echo ""
 
+# Note: IRC messages contain mIRC color codes (\x03NN) between brackets
+# and text, e.g. "[\x0303New PR\x03]". Assertions use substrings that
+# don't span color code boundaries.
+
 # Test 1: PR opened
 send_webhook "$PAYLOAD_DIR/pr_opened.json"
-assert_output "PR opened" "[New PR]"
+assert_output "PR opened" "New PR"
 sleep 1
 
 # Test 2: PR closed (merged)
 send_webhook "$PAYLOAD_DIR/pr_closed_merged.json"
-assert_output "PR closed merged" "[Merged PR]"
+assert_output "PR closed merged" "Merged PR"
 sleep 1
 
 # Test 3: PR closed (not merged)
 send_webhook "$PAYLOAD_DIR/pr_closed_not_merged.json"
-assert_output "PR closed not merged" "[Closed PR]"
+assert_output "PR closed not merged" "Closed PR"
 sleep 1
 
 # Test 4: PR labeled
@@ -153,22 +157,22 @@ sleep 1
 
 # Test 6: CI status success
 send_webhook "$PAYLOAD_DIR/status_success.json"
-assert_output "Status success" "[Success]"
+assert_output "Status success" "Success"
 sleep 1
 
 # Test 7: CI status pending
 send_webhook "$PAYLOAD_DIR/status_pending.json"
-assert_output "Status pending" "[Pending]"
+assert_output "Status pending" "Pending"
 sleep 1
 
 # Test 8: CI status failure
 send_webhook "$PAYLOAD_DIR/status_failure.json"
-assert_output "Status failure" "[Failed]"
+assert_output "Status failure" "Failed"
 sleep 1
 
 # Test 9: Push commits
 send_webhook "$PAYLOAD_DIR/push_commits.json"
-assert_output "Push commit" "[Commits]"
+assert_output "Push commit" "Commits"
 sleep 1
 
 # Test 10: Check run lint success (should NOT produce a message, just verify no error)

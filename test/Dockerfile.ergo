@@ -1,5 +1,8 @@
 FROM ghcr.io/ergochat/ergo:latest
 
+# The ergo image is Alpine-based; install nc for the healthcheck
+RUN apk add --no-cache netcat-openbsd 2>/dev/null || true
+
 COPY ergo/ircd.yaml /ircd/ircd.yaml
 COPY ergo/fullchain.pem /ircd/fullchain.pem
 COPY ergo/privkey.pem /ircd/privkey.pem
