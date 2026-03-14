@@ -1,6 +1,8 @@
 AC_INIT([lunabot], [0.5.6], [], [lunabot])
 AM_INIT_AUTOMAKE([foreign subdir-objects -Wall -Werror])
+AC_CONFIG_MACRO_DIRS([m4])
 AC_PROG_CC
+AM_PROG_AR
 LT_INIT([dlopen])
 
 PKG_CHECK_MODULES([MICROHTTPD], [libmicrohttpd])
