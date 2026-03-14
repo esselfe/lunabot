@@ -32,6 +32,15 @@ static void signal_handler(int sig) {
     running = 0;
 }
 
+struct ObserverConfig {
+    const char *server;
+    int port;
+    const char *nick;
+    const char *channel;
+    int use_tls;
+    int timeout_secs;
+};
+
 /* Write a string to the IRC connection (SSL or plain) */
 static int irc_write(SSL *ssl, int sock, const char *data, int use_tls) {
     size_t len = strlen(data);
@@ -71,9 +80,7 @@ static void handle_line(const char *line, const char *channel,
     }
 }
 
-static void parse_options(int argc, char **argv, const char **server,
-                          int *port, const char **nick, const char **channel,
-                          int *use_tls, int *timeout_secs) {
+static void parse_options(int argc, char **argv, struct ObserverConfig *cfg) {
     static const struct option long_opts[] = {
         {"server",  required_argument, NULL, 's'},
         {"port",    required_argument, NULL, 'p'},
@@ -88,13 +95,13 @@ static void parse_options(int argc, char **argv, const char **server,
     int opt;
     while ((opt = getopt_long(argc, argv, "s:p:n:c:tTo:", long_opts, NULL)) != -1) {
         switch (opt) {
-        case 's': *server = optarg; break;
-        case 'p': *port = atoi(optarg); break;
-        case 'n': *nick = optarg; break;
-        case 'c': *channel = optarg; break;
-        case 't': *use_tls = 1; break;
-        case 'T': *use_tls = 0; break;
-        case 'o': *timeout_secs = atoi(optarg); break;
+        case 's': cfg->server = optarg; break;
+        case 'p': cfg->port = atoi(optarg); break;
+        case 'n': cfg->nick = optarg; break;
+        case 'c': cfg->channel = optarg; break;
+        case 't': cfg->use_tls = 1; break;
+        case 'T': cfg->use_tls = 0; break;
+        case 'o': cfg->timeout_secs = atoi(optarg); break;
         default:
             fprintf(stderr, "Usage: observer [--server HOST] [--port PORT] "
                     "[--nick NICK] [--channel CHAN] [--tls|--no-tls] "
@@ -153,7 +160,7 @@ static int setup_tls(int sock, SSL_CTX **out_ctx, SSL **out_ssl) {
 
     *out_ssl = SSL_new(*out_ctx);
     SSL_set_fd(*out_ssl, sock); // NOSONAR — no hostname verification needed for local test server
-    if (SSL_connect(*out_ssl) <= 0) {
+    if (SSL_connect(*out_ssl) <= 0) { // NOSONAR — test client, no hostname verification needed
         fprintf(stderr, "observer: SSL_connect failed\n");
         ERR_print_errors_fp(stderr);
         SSL_free(*out_ssl);
@@ -164,11 +171,38 @@ static int setup_tls(int sock, SSL_CTX **out_ctx, SSL **out_ssl) {
     return 0;
 }
 
+/* Process received bytes, accumulate into linebuf, and handle complete lines */
+static void process_received_data(const char *readbuf, int bytes,
+                                   char *linebuf, int *line_pos,
+                                   int *joined, const char *channel,
+                                   SSL *ssl, int sock, int use_tls) {
+    char cmd[LINE_BUF_SIZE];
+    for (int i = 0; i < bytes; i++) {
+        if (readbuf[i] == '\r')
+            continue;
+        if (readbuf[i] != '\n') {
+            if (*line_pos < LINE_BUF_SIZE - 1)
+                linebuf[(*line_pos)++] = readbuf[i];
+            continue;
+        }
+        linebuf[*line_pos] = '\0';
+        if (*line_pos > 0) {
+            if (!*joined && strstr(linebuf, " 001 ")) {
+                snprintf(cmd, sizeof(cmd), "JOIN %s\r\n", channel);
+                irc_write(ssl, sock, cmd, use_tls);
+                *joined = 1;
+                fprintf(stderr, "observer: joining %s\n", channel);
+            }
+            handle_line(linebuf, channel, ssl, sock, use_tls);
+        }
+        *line_pos = 0;
+    }
+}
+
 static void irc_read_loop(SSL *ssl, int sock, int use_tls,
                            const char *channel, int timeout_secs) {
     char readbuf[LINE_BUF_SIZE];
     char linebuf[LINE_BUF_SIZE];
-    char cmd[LINE_BUF_SIZE];
     int line_pos = 0;
     int joined = 0;
     time_t start_time = time(NULL);
@@ -180,85 +214,67 @@ static void irc_read_loop(SSL *ssl, int sock, int use_tls,
     while (running) {
         if (time(NULL) - start_time >= timeout_secs) {
             fprintf(stderr, "observer: timeout after %d seconds\n", timeout_secs);
-            break;
+            return;
         }
 
         int poll_ret = poll(&pfd, 1, 1000);
         if (poll_ret < 0) {
             if (errno == EINTR) continue;
             perror("observer: poll");
-            break;
+            return;
         }
         if (poll_ret == 0) continue;
 
         int bytes = irc_read(ssl, sock, readbuf, sizeof(readbuf) - 1, use_tls);
         if (bytes <= 0) {
             fprintf(stderr, "observer: connection closed\n");
-            break;
+            return;
         }
         readbuf[bytes] = '\0';
 
-        for (int i = 0; i < bytes; i++) {
-            if (readbuf[i] == '\r') continue;
-            if (readbuf[i] != '\n') {
-                if (line_pos < LINE_BUF_SIZE - 1)
-                    linebuf[line_pos++] = readbuf[i];
-                continue;
-            }
-            linebuf[line_pos] = '\0';
-            if (line_pos > 0) {
-                if (!joined && strstr(linebuf, " 001 ")) {
-                    snprintf(cmd, sizeof(cmd), "JOIN %s\r\n", channel);
-                    irc_write(ssl, sock, cmd, use_tls);
-                    joined = 1;
-                    fprintf(stderr, "observer: joining %s\n", channel);
-                }
-                handle_line(linebuf, channel, ssl, sock, use_tls);
-            }
-            line_pos = 0;
-        }
+        process_received_data(readbuf, bytes, linebuf, &line_pos,
+                              &joined, channel, ssl, sock, use_tls);
     }
 }
 
 int main(int argc, char **argv) {
-    const char *server = "ergo";
-    int port = 6697;
-    const char *nick = "observer";
-    const char *channel = "#test-lunabot";
-    int use_tls = 1;
-    int timeout_secs = 120;
+    struct ObserverConfig cfg = {
+        .server = "ergo",
+        .port = 6697,
+        .nick = "observer",
+        .channel = "#test-lunabot",
+        .use_tls = 1,
+        .timeout_secs = 120
+    };
 
-    parse_options(argc, argv, &server, &port, &nick, &channel,
-                  &use_tls, &timeout_secs);
+    parse_options(argc, argv, &cfg);
 
     signal(SIGINT, signal_handler);
     signal(SIGTERM, signal_handler);
 
-    int sock = establish_connection(server, port);
+    int sock = establish_connection(cfg.server, cfg.port);
     if (sock < 0)
         return 1;
 
     SSL_CTX *ctx = NULL;
     SSL *ssl = NULL;
-    if (use_tls) {
-        if (setup_tls(sock, &ctx, &ssl) < 0) {
-            close(sock);
-            return 1;
-        }
+    if (cfg.use_tls && setup_tls(sock, &ctx, &ssl) < 0) {
+        close(sock);
+        return 1;
     }
 
     char cmd[LINE_BUF_SIZE];
-    snprintf(cmd, sizeof(cmd), "NICK %s\r\n", nick);
-    irc_write(ssl, sock, cmd, use_tls);
+    snprintf(cmd, sizeof(cmd), "NICK %s\r\n", cfg.nick);
+    irc_write(ssl, sock, cmd, cfg.use_tls);
 
-    snprintf(cmd, sizeof(cmd), "USER %s 0 * :Test Observer\r\n", nick);
-    irc_write(ssl, sock, cmd, use_tls);
+    snprintf(cmd, sizeof(cmd), "USER %s 0 * :Test Observer\r\n", cfg.nick);
+    irc_write(ssl, sock, cmd, cfg.use_tls);
 
-    irc_read_loop(ssl, sock, use_tls, channel, timeout_secs);
+    irc_read_loop(ssl, sock, cfg.use_tls, cfg.channel, cfg.timeout_secs);
 
-    irc_write(ssl, sock, "QUIT :done\r\n", use_tls);
+    irc_write(ssl, sock, "QUIT :done\r\n", cfg.use_tls);
 
-    if (use_tls && ssl) {
+    if (cfg.use_tls && ssl) {
         SSL_shutdown(ssl);
         SSL_free(ssl);
     }

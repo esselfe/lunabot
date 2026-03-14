@@ -337,6 +337,24 @@ static int FetchPullRequestBySha(const char *repo_full_name,
 	return 0;
 }
 
+// Check whether a label event should be skipped based on config flags
+// and repository name. Returns 1 to skip, 0 to process.
+static int ShouldSkipLabelEvent(json_t *root) {
+	if (libglobals->ignore_labels)
+		return 1;
+
+	if (libglobals->only_core_labels) {
+		json_t *repo = json_object_get(root, "repository");
+		json_t *repo_name = json_is_object(repo) ?
+			json_object_get(repo, "name") : NULL;
+		if (json_is_string(repo_name) &&
+		  strcmp(json_string_value(repo_name), "moonbase-core") != 0)
+			return 1;
+	}
+
+	return 0;
+}
+
 void ParseJsonData(char *json_data) {
 	if (libglobals->debug)
 		fprintf(stderr, "ParseJsonData() started\n");
@@ -448,20 +466,9 @@ void ParseJsonData(char *json_data) {
 	json_t *pr = json_object_get(root, "pull_request");
 	if (json_is_string(action) && json_is_object(pr)) {
 		if (strcmp(json_string_value(action), "labeled") == 0) {
-			if (libglobals->ignore_labels) {
+			if (ShouldSkipLabelEvent(root)) {
 				json_decref(root);
 				return;
-			}
-
-			if (libglobals->only_core_labels) {
-				json_t *repo = json_object_get(root, "repository");
-				json_t *repo_name = json_is_object(repo) ?
-					json_object_get(repo, "name") : NULL;
-				if (json_is_string(repo_name) &&
-				  strcmp(json_string_value(repo_name), "moonbase-core") != 0) {
-					json_decref(root);
-					return;
-				}
 			}
 
 			json_t *sender = json_object_get(root, "sender");
@@ -493,20 +500,9 @@ void ParseJsonData(char *json_data) {
 			return;
 		}
 		else if (strcmp(json_string_value(action), "unlabeled") == 0) {
-			if (libglobals->ignore_labels) {
+			if (ShouldSkipLabelEvent(root)) {
 				json_decref(root);
 				return;
-			}
-
-			if (libglobals->only_core_labels) {
-				json_t *repo = json_object_get(root, "repository");
-				json_t *repo_name = json_is_object(repo) ?
-					json_object_get(repo, "name") : NULL;
-				if (json_is_string(repo_name) &&
-				  strcmp(json_string_value(repo_name), "moonbase-core") != 0) {
-					json_decref(root);
-					return;
-				}
 			}
 
 			json_t *sender = json_object_get(root, "sender");

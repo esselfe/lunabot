@@ -44,6 +44,7 @@ cleanup() {
     else
         exit 1
     fi
+    return 0
 }
 trap cleanup EXIT
 
@@ -53,6 +54,7 @@ compute_signature() {
     local hex
     hex=$(openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" "$payload_file" | sed 's/^.*= //')
     echo "sha256=$hex"
+    return 0
 }
 
 # Send a webhook payload, return HTTP status code
@@ -65,6 +67,7 @@ send_webhook() {
         -H "Content-Type: application/json" \
         -H "X-Hub-Signature-256: $sig" \
         --data-binary @"$payload_file"
+    return 0
 }
 
 # Assert that a substring appears in the observer log within 5 seconds
@@ -138,7 +141,7 @@ while [[ "$WAIT_COUNT" -lt 60 ]]; do
 done
 
 if [[ "$WAIT_COUNT" -ge 60 ]]; then
-    echo "ERROR: Lunabot webhook endpoint did not start within 60 seconds."
+    echo "ERROR: Lunabot webhook endpoint did not start within 60 seconds." >&2
     echo "Lunabot logs:"
     docker compose -f "$COMPOSE_FILE" logs lunabot 2>/dev/null || true
     exit 1
