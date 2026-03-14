@@ -4,6 +4,15 @@ SUBDIRS = src
 
 EXTRA_DIST = lunabot.conf.json Makefile.simple README.md LICENSE CLAUDE.md
 
+.PHONY: test test-clean
+
+test: all
+	@echo "Running integration tests..."
+	@bash $(top_srcdir)/test/run-tests.sh
+
+test-clean:
+	docker compose -f $(top_srcdir)/test/docker-compose.yml down --volumes --remove-orphans 2>/dev/null || true
+
 MAINTAINERCLEANFILES = \
 	aclocal.m4 \
 	ar-lib \
