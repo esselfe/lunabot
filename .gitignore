@@ -1,2 +1,31 @@
 .passwd
 .secret
+
+# Autotools generated (regenerate with ./autogen.sh)
+/aclocal.m4
+/ar-lib
+/autom4te.cache/
+/compile
+/config.guess
+/config.sub
+/configure
+/depcomp
+/install-sh
+/ltmain.sh
+/missing
+/m4/
+Makefile.in
+
+# Configure/build output
+/config.log
+/config.status
+/libtool
+Makefile
+.deps/
+.libs/
+*.o
+*.lo
+*.la
+src/lunabot
+src/.libs/
+src/.deps/
