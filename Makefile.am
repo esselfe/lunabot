@@ -20,6 +20,7 @@ MAINTAINERCLEANFILES = \
 	config.guess \
 	config.sub \
 	configure \
+	configure~ \
 	depcomp \
 	install-sh \
 	ltmain.sh \
