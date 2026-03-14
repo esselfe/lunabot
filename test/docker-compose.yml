@@ -1,0 +1,43 @@
+services:
+  ergo:
+    build:
+      context: .
+      dockerfile: Dockerfile.ergo
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 6697"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    networks:
+      - testnet
+
+  lunabot:
+    build:
+      context: ..
+      dockerfile: test/Dockerfile.lunabot
+    command: ./lunabot --irc-server ergo --irc-port 6697 --webhook-port 3000 --channel "#test-lunabot" --nick lunabot
+    depends_on:
+      ergo:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      - LUNABOT_NICKSERV_PASSWORD=test-password
+      - LUNABOT_WEBHOOK_SECRET=test-webhook-secret
+    networks:
+      - testnet
+
+  observer:
+    build:
+      context: ..
+      dockerfile: test/Dockerfile.lunabot
+    command: ./observer --server ergo --port 6697 --nick observer --channel "#test-lunabot" --timeout 120
+    depends_on:
+      ergo:
+        condition: service_healthy
+    networks:
+      - testnet
+
+networks:
+  testnet:
+    driver: bridge
