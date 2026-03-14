@@ -3,7 +3,7 @@
 FROM debian:bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential autoconf automake libtool pkg-config \
+    build-essential autoconf automake autoconf-archive libtool pkg-config \
     libmicrohttpd-dev libjansson-dev libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 

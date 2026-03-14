@@ -56,7 +56,7 @@ send_webhook() {
         -X POST "$WEBHOOK_URL" \
         -H "Content-Type: application/json" \
         -H "X-Hub-Signature-256: $sig" \
-        -d @"$payload_file"
+        --data-binary @"$payload_file"
 }
 
 # Assert that a substring appears in the observer log within 5 seconds
@@ -100,27 +100,33 @@ docker compose -f "$COMPOSE_FILE" up --build -d
 # Step 3: Start capturing observer logs
 capture_observer_output
 
-# Step 4: Wait for lunabot to connect and join the channel
-echo "Waiting for lunabot to connect to IRC..."
+# Step 4: Wait for lunabot's webhook endpoint to be ready and IRC connected
+echo "Waiting for lunabot to start..."
 WAIT_COUNT=0
 while [ "$WAIT_COUNT" -lt 60 ]; do
-    if docker compose -f "$COMPOSE_FILE" logs lunabot 2>/dev/null | grep -q "JOIN"; then
-        echo "Lunabot connected and joined channel."
-        break
+    # Check if the webhook port is responding (any HTTP response means MHD is up)
+    if curl -s -o /dev/null -w "%{http_code}" "$WEBHOOK_URL" 2>/dev/null | grep -qE '^[0-9]+$'; then
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$WEBHOOK_URL" 2>/dev/null)
+        if [ "$HTTP_CODE" != "000" ]; then
+            echo "Lunabot webhook endpoint is up (HTTP $HTTP_CODE)."
+            break
+        fi
     fi
     sleep 1
     WAIT_COUNT=$((WAIT_COUNT + 1))
 done
 
 if [ "$WAIT_COUNT" -ge 60 ]; then
-    echo "ERROR: Lunabot did not connect within 60 seconds."
+    echo "ERROR: Lunabot webhook endpoint did not start within 60 seconds."
     echo "Lunabot logs:"
     docker compose -f "$COMPOSE_FILE" logs lunabot 2>/dev/null || true
     exit 1
 fi
 
-# Give a moment for the observer to also join
-sleep 2
+# Wait for lunabot to connect to IRC and the observer to join
+# The webhook is up, but IRC connection happens in a thread; give it time
+echo "Waiting for IRC connections to establish..."
+sleep 5
 
 echo ""
 echo "=== Running Tests ==="
@@ -130,48 +136,58 @@ echo ""
 # and text, e.g. "[\x0303New PR\x03]". Assertions use substrings that
 # don't span color code boundaries.
 
+# Helper: send webhook and check HTTP status
+send_and_check() {
+    local payload_file="$1"
+    local http_status
+    http_status=$(send_webhook "$payload_file")
+    if [ "$http_status" != "200" ]; then
+        echo "  WARNING: Webhook returned HTTP $http_status for $(basename "$payload_file")"
+    fi
+}
+
 # Test 1: PR opened
-send_webhook "$PAYLOAD_DIR/pr_opened.json"
+send_and_check "$PAYLOAD_DIR/pr_opened.json"
 assert_output "PR opened" "New PR"
 sleep 1
 
 # Test 2: PR closed (merged)
-send_webhook "$PAYLOAD_DIR/pr_closed_merged.json"
+send_and_check "$PAYLOAD_DIR/pr_closed_merged.json"
 assert_output "PR closed merged" "Merged PR"
 sleep 1
 
 # Test 3: PR closed (not merged)
-send_webhook "$PAYLOAD_DIR/pr_closed_not_merged.json"
+send_and_check "$PAYLOAD_DIR/pr_closed_not_merged.json"
 assert_output "PR closed not merged" "Closed PR"
 sleep 1
 
 # Test 4: PR labeled
-send_webhook "$PAYLOAD_DIR/pr_labeled.json"
+send_and_check "$PAYLOAD_DIR/pr_labeled.json"
 assert_output "PR labeled" "added the 'enhancement' label"
 sleep 1
 
 # Test 5: PR unlabeled
-send_webhook "$PAYLOAD_DIR/pr_unlabeled.json"
+send_and_check "$PAYLOAD_DIR/pr_unlabeled.json"
 assert_output "PR unlabeled" "removed the 'enhancement' label"
 sleep 1
 
 # Test 6: CI status success
-send_webhook "$PAYLOAD_DIR/status_success.json"
+send_and_check "$PAYLOAD_DIR/status_success.json"
 assert_output "Status success" "Success"
 sleep 1
 
 # Test 7: CI status pending
-send_webhook "$PAYLOAD_DIR/status_pending.json"
+send_and_check "$PAYLOAD_DIR/status_pending.json"
 assert_output "Status pending" "Pending"
 sleep 1
 
 # Test 8: CI status failure
-send_webhook "$PAYLOAD_DIR/status_failure.json"
+send_and_check "$PAYLOAD_DIR/status_failure.json"
 assert_output "Status failure" "Failed"
 sleep 1
 
 # Test 9: Push commits
-send_webhook "$PAYLOAD_DIR/push_commits.json"
+send_and_check "$PAYLOAD_DIR/push_commits.json"
 assert_output "Push commit" "Commits"
 sleep 1
 

@@ -36,22 +36,6 @@ channels:
     registration:
         enabled: true
 
-oper-classes:
-    server-admin:
-        title: Server Admin
-        capabilities:
-            - "oper:local_kill"
-            - "oper:local_ban"
-            - "oper:local_unban"
-            - "chanreg"
-            - "accreg"
-
-opers:
-    admin:
-        class: server-admin
-        whois-line: is a server admin
-        password: adminpass
-
 limits:
     nicklen: 32
     channellen: 64

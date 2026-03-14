@@ -15,7 +15,7 @@ services:
     build:
       context: ..
       dockerfile: test/Dockerfile.lunabot
-    command: ./lunabot --irc-server ergo --irc-port 6697 --webhook-port 3000 --channel "#test-lunabot" --nick lunabot
+    command: stdbuf -oL ./lunabot --irc-server ergo --irc-port 6697 --webhook-port 3000 --channel "#test-lunabot" --nick lunabot
     depends_on:
       ergo:
         condition: service_healthy
