@@ -1,0 +1,11 @@
+FROM ghcr.io/ergochat/ergo:latest
+
+COPY ergo/ircd.yaml /ircd/ircd.yaml
+COPY ergo/fullchain.pem /ircd/fullchain.pem
+COPY ergo/privkey.pem /ircd/privkey.pem
+
+EXPOSE 6667 6697
+
+WORKDIR /ircd
+
+CMD ["ergo", "run", "--conf", "/ircd/ircd.yaml"]

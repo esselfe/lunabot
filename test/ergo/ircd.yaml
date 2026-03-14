@@ -1,0 +1,85 @@
+# Ergo IRC server configuration for lunabot integration tests
+network:
+    name: TestNet
+
+server:
+    name: ergo.test
+    listeners:
+        ":6667":
+        ":6697":
+            tls:
+                cert: /ircd/fullchain.pem
+                key: /ircd/privkey.pem
+    max-sendq: 96k
+    ip-cloaking:
+        enabled: false
+
+accounts:
+    registration:
+        enabled: true
+        allow-before-connect: true
+        throttling:
+            enabled: false
+        bcrypt-cost: 4
+        email-verification:
+            enabled: false
+    authentication-enabled: true
+    nick-reservation:
+        enabled: true
+        method: strict
+    multiclient:
+        enabled: true
+        allowed-by-default: true
+
+channels:
+    default-modes: +nt
+    registration:
+        enabled: true
+
+oper-classes:
+    server-admin:
+        title: Server Admin
+        capabilities:
+            - "oper:local_kill"
+            - "oper:local_ban"
+            - "oper:local_unban"
+            - "chanreg"
+            - "accreg"
+
+opers:
+    admin:
+        class: server-admin
+        whois-line: is a server admin
+        password: adminpass
+
+limits:
+    nicklen: 32
+    channellen: 64
+    awaylen: 390
+    kicklen: 390
+    topiclen: 390
+    monitor-entries: 100
+    whowas-entries: 100
+    chan-list-filter: 100
+    registration-messages: 1024
+    multiline:
+        max-bytes: 4096
+        max-lines: 100
+
+connection-limits:
+    enabled: false
+
+connection-throttling:
+    enabled: false
+
+history:
+    enabled: false
+
+datastore:
+    path: /tmp/ergo.db
+    autoupgrade: true
+
+logging:
+    - method: stderr
+      type: "*"
+      level: warn
