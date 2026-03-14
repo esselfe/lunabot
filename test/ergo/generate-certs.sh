@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CERT="$SCRIPT_DIR/fullchain.pem"
 KEY="$SCRIPT_DIR/privkey.pem"
 
-if [ -f "$CERT" ] && [ -f "$KEY" ]; then
+if [[ -f "$CERT" ]] && [[ -f "$KEY" ]]; then
     echo "TLS certificates already exist, skipping generation."
     exit 0
 fi

@@ -150,7 +150,7 @@ char *SanitizeMessage(json_t *root, json_t *msg) {
 	memset(msg_text, 0, msg_text_len + 1);
 	
 	const char *msg_text_orig = json_string_value(msg);
-	char *c = (char *)msg_text_orig;
+	const char *c = msg_text_orig;
 	unsigned int msg_cnt = 0;
 	while (*c != '\0') {
 		if (*c == '\n' || *c == '\r' || *c == '\a' || *c == '\033')
@@ -455,43 +455,42 @@ void ParseJsonData(char *json_data) {
 
 			if (libglobals->only_core_labels) {
 				json_t *repo = json_object_get(root, "repository");
-				if (json_is_object(repo)) {
-					json_t *repo_name = json_object_get(repo, "name");
-					if (json_is_string(repo_name)) {
-						if (strcmp(json_string_value(repo_name),
-						  "moonbase-core") != 0) {
-							json_decref(root);
-							return;
-						}
-					}
+				json_t *repo_name = json_is_object(repo) ?
+					json_object_get(repo, "name") : NULL;
+				if (json_is_string(repo_name) &&
+				  strcmp(json_string_value(repo_name), "moonbase-core") != 0) {
+					json_decref(root);
+					return;
 				}
 			}
 
 			json_t *sender = json_object_get(root, "sender");
-			if (json_is_object(sender)) {
-				json_t *username = json_object_get(sender, "login");
-				json_t *title = json_object_get(pr, "title");
-				if (!json_is_string(title)) {
-					json_decref(root);
-					return;
-				}
-				char *title_text = SanitizeMessage(root, title);
-
-				json_t *url = json_object_get(pr, "html_url");
-				json_t *label = json_object_get(root, "label");
-				json_t *label_name = json_object_get(label, "name");
-				snprintf(buffer, sizeof(buffer), 
-					"[%sLabels%s]:    %s added the '%s' label to '%s' - %s",
-					LIGHT_GREEN, NORMAL,
-					json_string_value(username),
-					json_string_value(label_name),
-					title_text, 
-					json_string_value(url));
-				SendIrcMessage(buffer);
-				free(title_text);
+			if (!json_is_object(sender)) {
 				json_decref(root);
 				return;
 			}
+			json_t *username = json_object_get(sender, "login");
+			json_t *title = json_object_get(pr, "title");
+			if (!json_is_string(title)) {
+				json_decref(root);
+				return;
+			}
+			char *title_text = SanitizeMessage(root, title);
+
+			json_t *url = json_object_get(pr, "html_url");
+			json_t *label = json_object_get(root, "label");
+			json_t *label_name = json_object_get(label, "name");
+			snprintf(buffer, sizeof(buffer),
+				"[%sLabels%s]:    %s added the '%s' label to '%s' - %s",
+				LIGHT_GREEN, NORMAL,
+				json_string_value(username),
+				json_string_value(label_name),
+				title_text,
+				json_string_value(url));
+			SendIrcMessage(buffer);
+			free(title_text);
+			json_decref(root);
+			return;
 		}
 		else if (strcmp(json_string_value(action), "unlabeled") == 0) {
 			if (libglobals->ignore_labels) {
@@ -501,43 +500,42 @@ void ParseJsonData(char *json_data) {
 
 			if (libglobals->only_core_labels) {
 				json_t *repo = json_object_get(root, "repository");
-				if (json_is_object(repo)) {
-					json_t *repo_name = json_object_get(repo, "name");
-					if (json_is_string(repo_name)) {
-						if (strcmp(json_string_value(repo_name),
-						  "moonbase-core") != 0) {
-							json_decref(root);
-							return;
-						}
-					}
+				json_t *repo_name = json_is_object(repo) ?
+					json_object_get(repo, "name") : NULL;
+				if (json_is_string(repo_name) &&
+				  strcmp(json_string_value(repo_name), "moonbase-core") != 0) {
+					json_decref(root);
+					return;
 				}
 			}
 
 			json_t *sender = json_object_get(root, "sender");
-			if (json_is_object(sender)) {
-				json_t *username = json_object_get(sender, "login");
-				json_t *title = json_object_get(pr, "title");
-				if (!json_is_string(title)) {
-					json_decref(root);
-					return;
-				}
-				char *title_text = SanitizeMessage(root, title);
-
-				json_t *url = json_object_get(pr, "html_url");
-				json_t *label = json_object_get(root, "label");
-				json_t *label_name = json_object_get(label, "name");
-				snprintf(buffer, sizeof(buffer), 
-					"[%sLabels%s]:    %s removed the '%s' label to '%s' - %s",
-					LIGHT_GREEN, NORMAL,
-					json_string_value(username),
-					json_string_value(label_name),
-					title_text, 
-					json_string_value(url));
-				SendIrcMessage(buffer);
-				free(title_text);
+			if (!json_is_object(sender)) {
 				json_decref(root);
 				return;
 			}
+			json_t *username = json_object_get(sender, "login");
+			json_t *title = json_object_get(pr, "title");
+			if (!json_is_string(title)) {
+				json_decref(root);
+				return;
+			}
+			char *title_text = SanitizeMessage(root, title);
+
+			json_t *url = json_object_get(pr, "html_url");
+			json_t *label = json_object_get(root, "label");
+			json_t *label_name = json_object_get(label, "name");
+			snprintf(buffer, sizeof(buffer),
+				"[%sLabels%s]:    %s removed the '%s' label to '%s' - %s",
+				LIGHT_GREEN, NORMAL,
+				json_string_value(username),
+				json_string_value(label_name),
+				title_text,
+				json_string_value(url));
+			SendIrcMessage(buffer);
+			free(title_text);
+			json_decref(root);
+			return;
 		}
 		else if (strcmp(json_string_value(action), "opened") == 0) {
 			json_t *title = json_object_get(pr, "title");
@@ -823,62 +821,62 @@ void HealthCheckTimeoutStart(void) {
 	pthread_attr_destroy(&attr);
 }
 
+static enum MHD_Result HandleHealthCheck(struct MHD_Connection *connection) {
+	// Ratelimit requests to prevent abuse
+	libglobals->health_check_t0 = time(NULL);
+	if (libglobals->health_check_t0 >
+	  libglobals->health_check_tprev + libglobals->health_check_wait) {
+		libglobals->health_check_tprev = libglobals->health_check_t0;
+
+		libglobals->health_check = 1;
+		char buffer2[BUFFER_SIZE];
+		sprintf(buffer2, "PING NickServ\r\n");
+		SSL_write(libglobals->pSSL, buffer2, strlen(buffer2));
+
+		HealthCheckTimeoutStart();
+
+		while (libglobals->health_check == 1)
+			sleep(1);
+	}
+	else {
+		sleep(1);
+		libglobals->health_check = 2;
+	}
+
+	if (libglobals->health_check < 0) {
+		libglobals->health_check = 0;
+		char *data = "<html><body><h2>500 Service error</h2></body></html>";
+		struct MHD_Response *response500;
+		response500 = MHD_create_response_from_buffer(strlen(data),
+				data, MHD_RESPMEM_PERSISTENT);
+		int ret = MHD_queue_response(connection, 500, response500);
+		MHD_destroy_response(response500);
+		return ret;
+	}
+
+	libglobals->health_check = 0;
+	char *data = "<html><body><h2>200 OK</h2></body></html>";
+	struct MHD_Response *response200;
+	response200 = MHD_create_response_from_buffer(strlen(data),
+			data, MHD_RESPMEM_PERSISTENT);
+	int ret = MHD_queue_response(connection, 200, response200);
+	MHD_destroy_response(response200);
+	return ret;
+}
+
 // HTTP request handler
-enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connection, 
-		const char *url, const char *method, 
+enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connection,
+		const char *url, const char *method,
 		const char *version, const char *upload_data,
 		unsigned long *upload_data_size, void **ptr) {
 	static char *json_buffer = NULL;
 	static unsigned int json_buffer_size = BUFFER_SIZE * 16;
 	static size_t total_size = 0;
 	static unsigned int cnt = 0;
-	
-	if (url) {
-		if (strcmp(method, MHD_HTTP_METHOD_GET) == 0 &&
-			strcmp(url, "/health") == 0) {
-			// Ratelimit requests to prevent abuse
-			libglobals->health_check_t0 = time(NULL);
-			if (libglobals->health_check_t0 >
-			  libglobals->health_check_tprev + libglobals->health_check_wait) {
-				libglobals->health_check_tprev = libglobals->health_check_t0;
-			
-				libglobals->health_check = 1;
-				char buffer2[BUFFER_SIZE];
-				sprintf(buffer2, "PING NickServ\r\n");
-				SSL_write(libglobals->pSSL, buffer2, strlen(buffer2));
-				
-				HealthCheckTimeoutStart();
-				
-				while (libglobals->health_check == 1)
-					sleep(1);
-			}
-			else {
-				sleep(1);
-				libglobals->health_check = 2;
-			}
-			
-			if (libglobals->health_check < 0) {
-				libglobals->health_check = 0;
-				char *data = "<html><body><h2>500 Service error</h2></body></html>";
-				struct MHD_Response *response500;
-				response500 = MHD_create_response_from_buffer(strlen(data),
-						data, MHD_RESPMEM_PERSISTENT);
-				int ret = MHD_queue_response(connection, 500, response500);
-				MHD_destroy_response(response500);
-				return ret;
-			}
-			else if (libglobals->health_check > 1) {
-				libglobals->health_check = 0;
-				char *data = "<html><body><h2>200 OK</h2></body></html>";
-				struct MHD_Response *response200;
-				response200 = MHD_create_response_from_buffer(strlen(data),
-						data, MHD_RESPMEM_PERSISTENT);
-				int ret = MHD_queue_response(connection, 200, response200);
-				MHD_destroy_response(response200);
-				return ret;
-			}
-		}
-	}
+
+	if (url && strcmp(method, MHD_HTTP_METHOD_GET) == 0 &&
+	  strcmp(url, "/health") == 0)
+		return HandleHealthCheck(connection);
 	
 	// Only accept POST requests
 	if (strcmp(method, MHD_HTTP_METHOD_POST) != 0) {

@@ -1,4 +1,4 @@
-FROM ghcr.io/ergochat/ergo:latest
+FROM ghcr.io/ergochat/ergo:v2.17.0
 
 # The ergo image is Alpine-based; install nc for the healthcheck
 RUN apk add --no-cache netcat-openbsd 2>/dev/null || true

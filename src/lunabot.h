@@ -41,14 +41,18 @@ extern const char *lunabot_version_string;
 #define IN    1
 #define OUT   2
 
+struct IrcConfig {
+	char *irc_server_hostname;
+	char irc_server_ip[16];
+	unsigned int irc_server_port;
+	int irc_sock;
+};
+
 struct GlobalVariables {
 	unsigned int debug;
 	unsigned int mainloopend;
 	int irc_connected;
-	int irc_sock;
-	char *irc_server_hostname;
-	char irc_server_ip[16];
-	unsigned int irc_server_port;
+	struct IrcConfig irc;
 	unsigned int webhook_port;
 	char *nick;
 	char *channel;
@@ -63,7 +67,8 @@ struct GlobalVariables {
 	unsigned int disable_logging;
 	int health_check; // Internal
 	int health_check_wait;
-	time_t health_check_tprev, health_check_t0;
+	time_t health_check_tprev;
+	time_t health_check_t0;
 };
 extern struct GlobalVariables globals;
 

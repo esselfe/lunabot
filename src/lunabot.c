@@ -170,10 +170,10 @@ char *GetIP(char *hostname) {
 		if (p->ai_family == AF_INET) { // IPv4
 			struct sockaddr_in *ipv4 = (struct sockaddr_in *)p->ai_addr;
 			addr = &(ipv4->sin_addr);
-			inet_ntop(p->ai_family, addr, globals.irc_server_ip,
-				sizeof(globals.irc_server_ip));
+			inet_ntop(p->ai_family, addr, globals.irc.irc_server_ip,
+				sizeof(globals.irc.irc_server_ip));
 			freeaddrinfo(res); // Cleanup
-			return globals.irc_server_ip;
+			return globals.irc.irc_server_ip;
 		}
 		else
 			continue;
@@ -189,8 +189,8 @@ void *IrcConnect(void *arg) {
 	struct sockaddr_in server_addr;
 
 	// Create socket
-	globals.irc_sock = socket(AF_INET, SOCK_STREAM, 0);
-	if (globals.irc_sock < 0) {
+	globals.irc.irc_sock = socket(AF_INET, SOCK_STREAM, 0);
+	if (globals.irc.irc_sock < 0) {
 		sprintf(buffer_log, "lunabot::IrcConnect() error: socket() failed: %s",
 			strerror(errno));
 		Log_fp(LOCAL, buffer_log);
@@ -199,27 +199,27 @@ void *IrcConnect(void *arg) {
 
 	globals.irc_connected = 1;
 
-	char *ret = GetIP(globals.irc_server_hostname);
+	char *ret = GetIP(globals.irc.irc_server_hostname);
 	if (ret == NULL) {
 		sprintf(buffer_log, "lunabot::IrcConnect() error: Cannot get an IP for '%s'",
-			globals.irc_server_hostname);
+			globals.irc.irc_server_hostname);
 		Log_fp(LOCAL, buffer_log);
-		close(globals.irc_sock);
+		close(globals.irc.irc_sock);
 		globals.irc_connected = 0;
 		return NULL;
 	}
 
 	server_addr.sin_family = AF_INET;
-	server_addr.sin_port = htons(globals.irc_server_port);
-	server_addr.sin_addr.s_addr = inet_addr(globals.irc_server_ip);
+	server_addr.sin_port = htons(globals.irc.irc_server_port);
+	server_addr.sin_addr.s_addr = inet_addr(globals.irc.irc_server_ip);
 
 	// Connect to IRC server
-	if (connect(globals.irc_sock, (struct sockaddr *)&server_addr,
+	if (connect(globals.irc.irc_sock, (struct sockaddr *)&server_addr,
 	  sizeof(server_addr)) < 0) {
 		sprintf(buffer_log, "lunabot::IrcConnect() error: connect() failed: %s",
 			strerror(errno));
 		Log_fp(LOCAL, buffer_log);
-		close(globals.irc_sock);
+		close(globals.irc.irc_sock);
 		globals.irc_connected = 0;
 		return NULL;
 	}
@@ -233,7 +233,7 @@ void *IrcConnect(void *arg) {
 	SSL_CTX *ctx = SSL_CTX_new(method);
 	if (!ctx) {
 		Log_fp(LOCAL, "lunabot::IrcConnect() error: Cannot create SSL context");
-		close(globals.irc_sock);
+		close(globals.irc.irc_sock);
 		globals.irc_connected = 0;
 		return NULL;
 	}
@@ -243,9 +243,9 @@ void *IrcConnect(void *arg) {
 	globals.pSSL = SSL_new(ctx);
 	SSL_set_options(globals.pSSL, SSL_OP_NO_COMPRESSION);
 
-	BIO *bio = BIO_new_socket(globals.irc_sock, BIO_CLOSE);
+	BIO *bio = BIO_new_socket(globals.irc.irc_sock, BIO_CLOSE);
 	SSL_set_bio(globals.pSSL, bio, bio);
-	SSL_set1_host(globals.pSSL, globals.irc_server_hostname);
+	SSL_set1_host(globals.pSSL, globals.irc.irc_server_hostname);
 	SSL_connect(globals.pSSL);
 
 	// Send basic IRC commands
@@ -309,17 +309,9 @@ void *IrcConnect(void *arg) {
 		}
 		else
 			Log_fp(IN, buffer);
-		
-		/* struct RawLine *raw = ParseRawLine_fp(buffer);
-		if (raw != NULL) {
-			if (strcmp(raw->command, "PONG") == 0)
-				Log_fp(LOCAL, "Got a pong from the server!");
-
-			FreeRawLine_fp(raw);
-		} */
 	}
 
-	close(globals.irc_sock);
+	close(globals.irc.irc_sock);
 	globals.irc_connected = 0;
 	
 	return NULL;
@@ -491,12 +483,12 @@ void ParseArgs(int *argc, char **argv) {
 			break;
 		case 'p': // --irc-port
 			if (optarg != NULL && strlen(optarg))
-				globals.irc_server_port = (unsigned int)atoi(optarg);
+				globals.irc.irc_server_port = (unsigned int)atoi(optarg);
 
 			break;
 		case 's': // --irc-server
 			if (optarg != NULL && strlen(optarg))
-				globals.irc_server_hostname = strdup(optarg);
+				globals.irc.irc_server_hostname = strdup(optarg);
 
 			break;
 		case 'w': // --webhook-port
@@ -519,11 +511,11 @@ int main(int argc, char **argv) {
 	ParseConfig();
 	ParseArgs(&argc, argv);
 
-	if (!globals.irc_server_hostname)
-		globals.irc_server_hostname = strdup(DEFAULT_IRC_SERVER);
+	if (!globals.irc.irc_server_hostname)
+		globals.irc.irc_server_hostname = strdup(DEFAULT_IRC_SERVER);
 
-	if (!globals.irc_server_port)
-		globals.irc_server_port = DEFAULT_IRC_PORT;
+	if (!globals.irc.irc_server_port)
+		globals.irc.irc_server_port = DEFAULT_IRC_PORT;
 		
 	if (!globals.webhook_port)
 		globals.webhook_port = DEFAULT_WEBHOOK_PORT;

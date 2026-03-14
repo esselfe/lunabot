@@ -71,14 +71,9 @@ static void handle_line(const char *line, const char *channel,
     }
 }
 
-int main(int argc, char **argv) {
-    const char *server = "ergo";
-    int port = 6697;
-    const char *nick = "observer";
-    const char *channel = "#test-lunabot";
-    int use_tls = 1;
-    int timeout_secs = 120;
-
+static void parse_options(int argc, char **argv, const char **server,
+                          int *port, const char **nick, const char **channel,
+                          int *use_tls, int *timeout_secs) {
     static const struct option long_opts[] = {
         {"server",  required_argument, NULL, 's'},
         {"port",    required_argument, NULL, 'p'},
@@ -93,26 +88,25 @@ int main(int argc, char **argv) {
     int opt;
     while ((opt = getopt_long(argc, argv, "s:p:n:c:tTo:", long_opts, NULL)) != -1) {
         switch (opt) {
-        case 's': server = optarg; break;
-        case 'p': port = atoi(optarg); break;
-        case 'n': nick = optarg; break;
-        case 'c': channel = optarg; break;
-        case 't': use_tls = 1; break;
-        case 'T': use_tls = 0; break;
-        case 'o': timeout_secs = atoi(optarg); break;
+        case 's': *server = optarg; break;
+        case 'p': *port = atoi(optarg); break;
+        case 'n': *nick = optarg; break;
+        case 'c': *channel = optarg; break;
+        case 't': *use_tls = 1; break;
+        case 'T': *use_tls = 0; break;
+        case 'o': *timeout_secs = atoi(optarg); break;
         default:
             fprintf(stderr, "Usage: observer [--server HOST] [--port PORT] "
                     "[--nick NICK] [--channel CHAN] [--tls|--no-tls] "
                     "[--timeout SECS]\n");
-            return 1;
+            exit(1);
         }
     }
+}
 
-    signal(SIGINT, signal_handler);
-    signal(SIGTERM, signal_handler);
-
-    /* Resolve server address */
-    struct addrinfo hints, *res;
+static int establish_connection(const char *server, int port) {
+    struct addrinfo hints;
+    struct addrinfo *res;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
@@ -123,67 +117,58 @@ int main(int argc, char **argv) {
     int err = getaddrinfo(server, port_str, &hints, &res);
     if (err != 0) {
         fprintf(stderr, "observer: getaddrinfo(%s): %s\n", server, gai_strerror(err));
-        return 1;
+        return -1;
     }
 
     int sock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (sock < 0) {
         perror("observer: socket");
         freeaddrinfo(res);
-        return 1;
+        return -1;
     }
 
     if (connect(sock, res->ai_addr, res->ai_addrlen) < 0) {
         perror("observer: connect");
         close(sock);
         freeaddrinfo(res);
-        return 1;
+        return -1;
     }
     freeaddrinfo(res);
 
     fprintf(stderr, "observer: connected to %s:%d\n", server, port);
+    return sock;
+}
 
-    /* TLS setup */
-    SSL_CTX *ctx = NULL;
-    SSL *ssl = NULL;
-    if (use_tls) {
-        SSL_library_init();
-        SSL_load_error_strings();
-        OpenSSL_add_all_algorithms();
+static int setup_tls(int sock, SSL_CTX **out_ctx, SSL **out_ssl) {
+    SSL_library_init();
+    SSL_load_error_strings();
+    OpenSSL_add_all_algorithms();
 
-        ctx = SSL_CTX_new(TLS_client_method());
-        if (!ctx) {
-            fprintf(stderr, "observer: SSL_CTX_new failed\n");
-            close(sock);
-            return 1;
-        }
-        /* Disable certificate verification for self-signed test certs */
-        SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
-
-        ssl = SSL_new(ctx);
-        SSL_set_fd(ssl, sock);
-        if (SSL_connect(ssl) <= 0) {
-            fprintf(stderr, "observer: SSL_connect failed\n");
-            ERR_print_errors_fp(stderr);
-            SSL_free(ssl);
-            SSL_CTX_free(ctx);
-            close(sock);
-            return 1;
-        }
-        fprintf(stderr, "observer: TLS established\n");
+    *out_ctx = SSL_CTX_new(TLS_client_method()); // NOSONAR — test client connecting to local self-signed Ergo server
+    if (!*out_ctx) {
+        fprintf(stderr, "observer: SSL_CTX_new failed\n");
+        return -1;
     }
+    SSL_CTX_set_verify(*out_ctx, SSL_VERIFY_NONE, NULL); // NOSONAR — intentionally skipping cert validation for self-signed test certs
 
-    /* Send NICK and USER */
-    char cmd[LINE_BUF_SIZE];
-    snprintf(cmd, sizeof(cmd), "NICK %s\r\n", nick);
-    irc_write(ssl, sock, cmd, use_tls);
+    *out_ssl = SSL_new(*out_ctx);
+    SSL_set_fd(*out_ssl, sock); // NOSONAR — no hostname verification needed for local test server
+    if (SSL_connect(*out_ssl) <= 0) {
+        fprintf(stderr, "observer: SSL_connect failed\n");
+        ERR_print_errors_fp(stderr);
+        SSL_free(*out_ssl);
+        SSL_CTX_free(*out_ctx);
+        return -1;
+    }
+    fprintf(stderr, "observer: TLS established\n");
+    return 0;
+}
 
-    snprintf(cmd, sizeof(cmd), "USER %s 0 * :Test Observer\r\n", nick);
-    irc_write(ssl, sock, cmd, use_tls);
-
-    /* Read loop with line buffering */
+static void irc_read_loop(SSL *ssl, int sock, int use_tls,
+                           const char *channel, int timeout_secs) {
     char readbuf[LINE_BUF_SIZE];
     char linebuf[LINE_BUF_SIZE];
+    char cmd[LINE_BUF_SIZE];
     int line_pos = 0;
     int joined = 0;
     time_t start_time = time(NULL);
@@ -193,19 +178,18 @@ int main(int argc, char **argv) {
     pfd.events = POLLIN;
 
     while (running) {
-        /* Check overall timeout */
         if (time(NULL) - start_time >= timeout_secs) {
             fprintf(stderr, "observer: timeout after %d seconds\n", timeout_secs);
             break;
         }
 
-        int poll_ret = poll(&pfd, 1, 1000); /* 1-second poll timeout */
+        int poll_ret = poll(&pfd, 1, 1000);
         if (poll_ret < 0) {
             if (errno == EINTR) continue;
             perror("observer: poll");
             break;
         }
-        if (poll_ret == 0) continue; /* timeout, loop back to check overall timeout */
+        if (poll_ret == 0) continue;
 
         int bytes = irc_read(ssl, sock, readbuf, sizeof(readbuf) - 1, use_tls);
         if (bytes <= 0) {
@@ -214,30 +198,64 @@ int main(int argc, char **argv) {
         }
         readbuf[bytes] = '\0';
 
-        /* Process each byte, splitting on \r\n */
         for (int i = 0; i < bytes; i++) {
             if (readbuf[i] == '\r') continue;
-            if (readbuf[i] == '\n') {
-                linebuf[line_pos] = '\0';
-                if (line_pos > 0) {
-                    /* Check for RPL_WELCOME (001) to send JOIN */
-                    if (!joined && strstr(linebuf, " 001 ")) {
-                        snprintf(cmd, sizeof(cmd), "JOIN %s\r\n", channel);
-                        irc_write(ssl, sock, cmd, use_tls);
-                        joined = 1;
-                        fprintf(stderr, "observer: joining %s\n", channel);
-                    }
-                    handle_line(linebuf, channel, ssl, sock, use_tls);
-                }
-                line_pos = 0;
-            } else {
+            if (readbuf[i] != '\n') {
                 if (line_pos < LINE_BUF_SIZE - 1)
                     linebuf[line_pos++] = readbuf[i];
+                continue;
             }
+            linebuf[line_pos] = '\0';
+            if (line_pos > 0) {
+                if (!joined && strstr(linebuf, " 001 ")) {
+                    snprintf(cmd, sizeof(cmd), "JOIN %s\r\n", channel);
+                    irc_write(ssl, sock, cmd, use_tls);
+                    joined = 1;
+                    fprintf(stderr, "observer: joining %s\n", channel);
+                }
+                handle_line(linebuf, channel, ssl, sock, use_tls);
+            }
+            line_pos = 0;
+        }
+    }
+}
+
+int main(int argc, char **argv) {
+    const char *server = "ergo";
+    int port = 6697;
+    const char *nick = "observer";
+    const char *channel = "#test-lunabot";
+    int use_tls = 1;
+    int timeout_secs = 120;
+
+    parse_options(argc, argv, &server, &port, &nick, &channel,
+                  &use_tls, &timeout_secs);
+
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+
+    int sock = establish_connection(server, port);
+    if (sock < 0)
+        return 1;
+
+    SSL_CTX *ctx = NULL;
+    SSL *ssl = NULL;
+    if (use_tls) {
+        if (setup_tls(sock, &ctx, &ssl) < 0) {
+            close(sock);
+            return 1;
         }
     }
 
-    /* Clean disconnect */
+    char cmd[LINE_BUF_SIZE];
+    snprintf(cmd, sizeof(cmd), "NICK %s\r\n", nick);
+    irc_write(ssl, sock, cmd, use_tls);
+
+    snprintf(cmd, sizeof(cmd), "USER %s 0 * :Test Observer\r\n", nick);
+    irc_write(ssl, sock, cmd, use_tls);
+
+    irc_read_loop(ssl, sock, use_tls, channel, timeout_secs);
+
     irc_write(ssl, sock, "QUIT :done\r\n", use_tls);
 
     if (use_tls && ssl) {

@@ -15,6 +15,7 @@ VERBOSE=0
 for arg in "$@"; do
     case "$arg" in
         -v|--verbose) VERBOSE=1 ;;
+        *) echo "Unknown argument: $arg" >&2; exit 1 ;;
     esac
 done
 
@@ -33,12 +34,12 @@ OBSERVER_PID=""
 cleanup() {
     echo ""
     echo "=== Teardown ==="
-    [ -n "$OBSERVER_PID" ] && kill "$OBSERVER_PID" 2>/dev/null || true
+    [[ -n "$OBSERVER_PID" ]] && kill "$OBSERVER_PID" 2>/dev/null || true
     docker compose -f "$COMPOSE_FILE" down --volumes --remove-orphans 2>/dev/null || true
     rm -f "$OBSERVER_LOG"
     echo ""
     echo "=== Results: $PASS_COUNT passed, $FAIL_COUNT failed ==="
-    if [ "$FAIL_COUNT" -eq 0 ]; then
+    if [[ "$FAIL_COUNT" -eq 0 ]]; then
         exit 0
     else
         exit 1
@@ -72,7 +73,7 @@ assert_output() {
     local expected="$2"
     local waited=0
 
-    while [ "$waited" -lt 10 ]; do
+    while [[ "$waited" -lt 10 ]]; do
         if grep -qF "$expected" "$OBSERVER_LOG" 2>/dev/null; then
             echo "  PASS: $description"
             PASS_COUNT=$((PASS_COUNT + 1))
@@ -91,17 +92,19 @@ assert_output() {
 capture_observer_output() {
     docker compose -f "$COMPOSE_FILE" logs --follow --no-log-prefix observer > "$OBSERVER_LOG" 2>&1 &
     OBSERVER_PID=$!
+    return 0
 }
 
 # In verbose mode, dump the observer log (IRC output) to the console
 dump_observer_log() {
-    if [ "$VERBOSE" -eq 1 ]; then
+    if [[ "$VERBOSE" -eq 1 ]]; then
         echo ""
         echo "=== IRC output (observer log) ==="
         # Strip mIRC color codes (\x03 + up to 2 digits) for readability
-        cat "$OBSERVER_LOG" 2>/dev/null | perl -pe 's/\x03(\d{1,2}(,\d{1,2})?)?//g' || true
+        perl -pe 's/\x03(\d{1,2}(,\d{1,2})?)?//g' < "$OBSERVER_LOG" 2>/dev/null || true
         echo "=== end IRC output ==="
     fi
+    return 0
 }
 
 echo "=== Lunabot Integration Tests ==="
@@ -121,11 +124,11 @@ capture_observer_output
 # Step 4: Wait for lunabot's webhook endpoint to be ready and IRC connected
 echo "Waiting for lunabot to start..."
 WAIT_COUNT=0
-while [ "$WAIT_COUNT" -lt 60 ]; do
+while [[ "$WAIT_COUNT" -lt 60 ]]; do
     # Check if the webhook port is responding (any HTTP response means MHD is up)
     if curl -s -o /dev/null -w "%{http_code}" "$WEBHOOK_URL" 2>/dev/null | grep -qE '^[0-9]+$'; then
         HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$WEBHOOK_URL" 2>/dev/null)
-        if [ "$HTTP_CODE" != "000" ]; then
+        if [[ "$HTTP_CODE" != "000" ]]; then
             echo "Lunabot webhook endpoint is up (HTTP $HTTP_CODE)."
             break
         fi
@@ -134,7 +137,7 @@ while [ "$WAIT_COUNT" -lt 60 ]; do
     WAIT_COUNT=$((WAIT_COUNT + 1))
 done
 
-if [ "$WAIT_COUNT" -ge 60 ]; then
+if [[ "$WAIT_COUNT" -ge 60 ]]; then
     echo "ERROR: Lunabot webhook endpoint did not start within 60 seconds."
     echo "Lunabot logs:"
     docker compose -f "$COMPOSE_FILE" logs lunabot 2>/dev/null || true
@@ -159,9 +162,10 @@ send_and_check() {
     local payload_file="$1"
     local http_status
     http_status=$(send_webhook "$payload_file")
-    if [ "$http_status" != "200" ]; then
+    if [[ "$http_status" != "200" ]]; then
         echo "  WARNING: Webhook returned HTTP $http_status for $(basename "$payload_file")"
     fi
+    return 0
 }
 
 # Test 1: PR opened
