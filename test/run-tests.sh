@@ -209,15 +209,14 @@ send_and_check "$PAYLOAD_DIR/push_commits.json"
 assert_output "Push commit" "Commits"
 sleep 1
 
-# Test 10: Check run lint success (should NOT produce a message, just verify no error)
-HTTP_STATUS=$(send_webhook "$PAYLOAD_DIR/checkrun_lint_success.json")
-if [ "$HTTP_STATUS" = "200" ]; then
-    echo "  PASS: Check run lint success (HTTP $HTTP_STATUS, no IRC message expected)"
-    PASS_COUNT=$((PASS_COUNT + 1))
-else
-    echo "  FAIL: Check run lint success (HTTP $HTTP_STATUS, expected 200)"
-    FAIL_COUNT=$((FAIL_COUNT + 1))
-fi
+# Test 10: Check run lint failure
+send_and_check "$PAYLOAD_DIR/checkrun_lint_failure.json"
+assert_output "Check run lint failure" "lint failed for PR #6"
+sleep 1
+
+# Test 11: Check run lint success
+send_and_check "$PAYLOAD_DIR/checkrun_lint_success.json"
+assert_output "Check run lint success" "lint passed for PR #6"
 
 dump_observer_log
 

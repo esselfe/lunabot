@@ -5,21 +5,15 @@
 #include <errno.h>
 #include <time.h>
 #include <sys/time.h>
-#include <stdatomic.h>
 #include <pthread.h>
 #include <openssl/ssl.h>
 #include <microhttpd.h>
 #include <jansson.h>
+#include <curl/curl.h>
 
 #include "lunabot.h"
 
 struct GlobalVariables *libglobals;
-
-static atomic_uint processing_lint_event;
-static unsigned int processing_lint_event_timeout = 60;
-time_t processing_lint_event_start_time;
-time_t processing_lint_event_current_time;
-pthread_mutex_t processing_lint_event_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void Log(unsigned int direction, char *text) {
 	char *dirstr;
@@ -181,40 +175,95 @@ static const char *StripGithubApiPrefix(const char *url) {
 	return url;
 }
 
-// Thread to reset the lint check flag if there's no comment event.
-// It's mostly just a timeout action.
-void *ProcessLintEventCallback(void *argp) {
-	processing_lint_event_start_time = time(NULL);
+struct CurlBuffer {
+	char *data;
+	size_t size;
+};
 
-	while (processing_lint_event) {
-		processing_lint_event_current_time = time(NULL);
-		if (processing_lint_event_current_time - processing_lint_event_start_time >=
-		  processing_lint_event_timeout)
-			break;
-		
-		sleep(1);
+static size_t CurlWriteCallback(void *contents, size_t size, size_t nmemb,
+  void *userp) {
+	size_t realsize = size * nmemb;
+	struct CurlBuffer *buf = (struct CurlBuffer *)userp;
+
+	char *ptr = realloc(buf->data, buf->size + realsize + 1);
+	if (ptr == NULL) {
+		Log(LOCAL, "CurlWriteCallback: realloc failed");
+		return 0;
 	}
-	
-	pthread_mutex_lock(&processing_lint_event_mutex);
-	processing_lint_event = 0;
-	pthread_mutex_unlock(&processing_lint_event_mutex);
-	
-	return NULL;
+
+	buf->data = ptr;
+	memcpy(&(buf->data[buf->size]), contents, realsize);
+	buf->size += realsize;
+	buf->data[buf->size] = '\0';
+
+	return realsize;
 }
 
-// Start the processing thread that makes sure the lint check flag is reset.
-void ProcessLintEventStart(void) {
-	pthread_mutex_lock(&processing_lint_event_mutex);
-	processing_lint_event = 1;
-	pthread_mutex_unlock(&processing_lint_event_mutex);
-	
-	pthread_t lint_thread;
-	pthread_attr_t attr;
-	pthread_attr_init(&attr);
-	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-	pthread_create(&lint_thread, &attr, ProcessLintEventCallback, NULL);
-	pthread_detach(lint_thread);
-	pthread_attr_destroy(&attr);
+static char *FetchPullRequestTitle(const char *repo_full_name, int pr_number) {
+	char url[BUFFER_SIZE];
+	snprintf(url, sizeof(url),
+		"https://api.github.com/repos/%s/pulls/%d",
+		repo_full_name, pr_number);
+
+	CURL *curl = curl_easy_init();
+	if (curl == NULL) {
+		Log(LOCAL, "FetchPullRequestTitle: curl_easy_init failed");
+		return NULL;
+	}
+
+	struct CurlBuffer response = { .data = malloc(1), .size = 0 };
+	if (response.data == NULL) {
+		Log(LOCAL, "FetchPullRequestTitle: malloc failed");
+		curl_easy_cleanup(curl);
+		return NULL;
+	}
+	response.data[0] = '\0';
+
+	curl_easy_setopt(curl, CURLOPT_URL, url);
+	curl_easy_setopt(curl, CURLOPT_USERAGENT, "lunabot");
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCallback);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&response);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+
+	CURLcode res = curl_easy_perform(curl);
+	if (res != CURLE_OK) {
+		char errbuf[BUFFER_SIZE];
+		snprintf(errbuf, sizeof(errbuf),
+			"FetchPullRequestTitle: curl error: %s",
+			curl_easy_strerror(res));
+		Log(LOCAL, errbuf);
+		free(response.data);
+		curl_easy_cleanup(curl);
+		return NULL;
+	}
+
+	curl_easy_cleanup(curl);
+
+	json_t *root;
+	json_error_t error;
+	root = json_loads(response.data, 0, &error);
+	free(response.data);
+
+	if (!root) {
+		char errbuf[BUFFER_SIZE];
+		snprintf(errbuf, sizeof(errbuf),
+			"FetchPullRequestTitle: JSON parse error: %s",
+			error.text);
+		Log(LOCAL, errbuf);
+		return NULL;
+	}
+
+	json_t *title = json_object_get(root, "title");
+	if (!json_is_string(title)) {
+		Log(LOCAL, "FetchPullRequestTitle: no title field in response");
+		json_decref(root);
+		return NULL;
+	}
+
+	char *title_text = SanitizeMessage(root, title);
+	json_decref(root);
+
+	return title_text;
 }
 
 void ParseJsonData(char *json_data) {
@@ -489,102 +538,97 @@ void ParseJsonData(char *json_data) {
 	json_t *check = json_object_get(root, "check_run");
 	if (check != NULL) {
 		json_t *name = json_object_get(check, "name");
-		if (name == NULL) {
+		if (!json_is_string(name)) {
 			json_decref(root);
 			return;
 		}
-		
-		unsigned int processing_lint_event_copy;
-		pthread_mutex_lock(&processing_lint_event_mutex);
-		processing_lint_event_copy = processing_lint_event;
-		pthread_mutex_unlock(&processing_lint_event_mutex);
-		
-		if (json_is_string(name) &&
-		  strncmp(json_string_value(name), "lint", 4) == 0) {
-			json_t *check_conclusion = json_object_get(check, "conclusion");
-			if (check_conclusion == NULL) {
-				json_decref(root);
-				return;
-			}
-			
-			if (json_is_string(check_conclusion) &&
-			  strncmp(json_string_value(check_conclusion), "failure", 7) == 0) {
-			  	// This also sets 'processing_lint_event' to 1
-			  	// which should trigger pulling the PR URL in the next conditional
-			  	// Note that in the event named "lint", there's no PR URL.
-				ProcessLintEventStart();
-				json_decref(root);
-				return;
-			}
-			
+
+		// Only handle "lint" check runs
+		if (strcmp(json_string_value(name), "lint") != 0) {
 			json_decref(root);
 			return;
 		}
-		else if (processing_lint_event_copy && json_is_string(name) &&
-		  strncmp(json_string_value(name), "comment", 7) == 0) {
-			json_t *check_status = json_object_get(check, "status");
-			if (check_status == NULL) {
-				json_decref(root);
-				return;
-			}
-			
-			if (json_is_string(check_status) &&
-			  strncmp(json_string_value(check_status), "queued", 6) == 0) {
-				json_decref(root);
-				return;
-			}
-			else if (json_is_string(check_status) &&
-			  strncmp(json_string_value(check_status), "completed", 9) == 0) {
-			  	pthread_mutex_lock(&processing_lint_event_mutex);
-				processing_lint_event = 0;
-				pthread_mutex_unlock(&processing_lint_event_mutex);
-				
-				json_t *suite = json_object_get(check, "check_suite");
-				if (suite == NULL) {
-					json_decref(root);
-					return;
-				}
-				
-				json_t *prs = json_object_get(suite, "pull_requests");
-				if (prs == NULL) {
-					json_decref(root);
-					return;
-				}
-				
-				// Just triple check this one
-				if (!json_is_array(prs) || json_array_size(prs) == 0) {
-					json_decref(root);
-					return;
-				}
-				
-				json_t *pr = json_array_get(prs, 0);
-				if (pr == NULL) {
-					json_decref(root);
-					return;
-				}
-				
-				json_t *pr_url = json_object_get(pr, "url");
-				if (pr_url == NULL) {
-					json_decref(root);
-					return;
-				}
-			
-				const char *url_path;
-				if (json_is_string(pr_url))
-					url_path = StripGithubApiPrefix(json_string_value(pr_url));
-				else  {
-					json_decref(root);
-					return;
-				}
-				
+
+		json_t *check_status = json_object_get(check, "status");
+		if (!json_is_string(check_status) ||
+		  strcmp(json_string_value(check_status), "completed") != 0) {
+			json_decref(root);
+			return;
+		}
+
+		json_t *check_conclusion = json_object_get(check, "conclusion");
+		if (!json_is_string(check_conclusion)) {
+			json_decref(root);
+			return;
+		}
+
+		const char *conclusion = json_string_value(check_conclusion);
+		json_t *html_url = json_object_get(check, "html_url");
+
+		// Extract PR number from check_run.pull_requests[0].number
+		int pr_number = 0;
+		json_t *prs = json_object_get(check, "pull_requests");
+		if (json_is_array(prs) && json_array_size(prs) > 0) {
+			json_t *pr_obj = json_array_get(prs, 0);
+			json_t *pr_num = json_object_get(pr_obj, "number");
+			if (json_is_integer(pr_num))
+				pr_number = json_integer_value(pr_num);
+		}
+
+		// Get repo full name from repository.full_name
+		const char *repo_full_name = NULL;
+		json_t *repo = json_object_get(root, "repository");
+		if (json_is_object(repo)) {
+			json_t *fn = json_object_get(repo, "full_name");
+			if (json_is_string(fn))
+				repo_full_name = json_string_value(fn);
+		}
+
+		// Fetch PR title from GitHub API (may return NULL)
+		char *pr_title = NULL;
+		if (pr_number > 0 && repo_full_name != NULL)
+			pr_title = FetchPullRequestTitle(repo_full_name, pr_number);
+
+		if (strcmp(conclusion, "failure") == 0) {
+			if (pr_number > 0 && repo_full_name != NULL) {
 				snprintf(buffer, sizeof(buffer),
-					"[%sChecks%s]:    check run failed for https://github.com/%s",
-					RED, NORMAL, url_path);
-				SendIrcMessage(buffer);
-				json_decref(root);
-				return;
+					"[%sChecks%s]:    lint failed for PR #%d '%s' - "
+					"https://github.com/%s/pull/%d | %s",
+					RED, NORMAL,
+					pr_number,
+					pr_title ? pr_title : "(unknown)",
+					repo_full_name, pr_number,
+					json_is_string(html_url) ?
+						json_string_value(html_url) : "");
+			} else {
+				snprintf(buffer, sizeof(buffer),
+					"[%sChecks%s]:    lint failed - %s",
+					RED, NORMAL,
+					json_is_string(html_url) ?
+						json_string_value(html_url) : "");
 			}
+			SendIrcMessage(buffer);
 		}
+		else if (strcmp(conclusion, "success") == 0) {
+			if (pr_number > 0 && repo_full_name != NULL) {
+				snprintf(buffer, sizeof(buffer),
+					"[%sChecks%s]:    lint passed for PR #%d '%s' - "
+					"https://github.com/%s/pull/%d",
+					GREEN, NORMAL,
+					pr_number,
+					pr_title ? pr_title : "(unknown)",
+					repo_full_name, pr_number);
+			} else {
+				snprintf(buffer, sizeof(buffer),
+					"[%sChecks%s]:    lint passed",
+					GREEN, NORMAL);
+			}
+			SendIrcMessage(buffer);
+		}
+
+		free(pr_title);
+		json_decref(root);
+		return;
 	}
 	
 	// Process push commits

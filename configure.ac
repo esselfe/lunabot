@@ -8,6 +8,7 @@ LT_INIT([dlopen])
 PKG_CHECK_MODULES([MICROHTTPD], [libmicrohttpd])
 PKG_CHECK_MODULES([JANSSON], [jansson])
 PKG_CHECK_MODULES([OPENSSL], [openssl >= 1.1.0])
+PKG_CHECK_MODULES([CURL], [libcurl])
 
 AX_PTHREAD([], [AC_MSG_ERROR([pthread is required])])
 AC_SEARCH_LIBS([dlopen], [dl], [], [AC_MSG_ERROR([dlopen is required])])
