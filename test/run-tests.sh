@@ -91,6 +91,22 @@ assert_output() {
     return 0
 }
 
+# Assert that a substring does NOT appear in the observer log (wait 3 seconds to be sure)
+assert_not_output() {
+    local description="$1"
+    local unexpected="$2"
+
+    sleep 3
+    if grep -qF "$unexpected" "$OBSERVER_LOG" 2>/dev/null; then
+        echo "  FAIL: $description (unexpected: '$unexpected' was found)"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+    else
+        echo "  PASS: $description"
+        PASS_COUNT=$((PASS_COUNT + 1))
+    fi
+    return 0
+}
+
 # Start capturing observer logs in the background
 capture_observer_output() {
     docker compose -f "$COMPOSE_FILE" logs --follow --no-log-prefix observer > "$OBSERVER_LOG" 2>&1 &
@@ -216,14 +232,26 @@ send_and_check "$PAYLOAD_DIR/push_commits.json"
 assert_output "Push commit" "Commits"
 sleep 1
 
-# Test 10: Check run lint failure
+# Test 10: Check run lint failure (fork PR in pull_requests[] — should be ignored)
 send_and_check "$PAYLOAD_DIR/checkrun_lint_failure.json"
-assert_output "Check run lint failure" "lint failed for PR #6"
+assert_output "Check run lint failure (fork PR ignored)" "lint failed"
+assert_not_output "Check run lint failure rejects fork PR" "PR #6 '"
 sleep 1
 
-# Test 11: Check run lint success
+# Test 11: Check run lint success (fork PR in pull_requests[] — should be ignored)
 send_and_check "$PAYLOAD_DIR/checkrun_lint_success.json"
-assert_output "Check run lint success" "lint passed for PR #6"
+assert_output "Check run lint success (fork PR ignored)" "lint passed"
+assert_not_output "Check run lint success rejects fork PR" "PR #6 '"
+sleep 1
+
+# Test 12: Check run lint failure (same-repo PR)
+send_and_check "$PAYLOAD_DIR/checkrun_lint_failure_same_repo.json"
+assert_output "Check run lint failure (same-repo PR)" "lint failed for PR #42"
+sleep 1
+
+# Test 13: Check run lint success (same-repo PR)
+send_and_check "$PAYLOAD_DIR/checkrun_lint_success_same_repo.json"
+assert_output "Check run lint success (same-repo PR)" "lint passed for PR #42"
 
 dump_observer_log
 

@@ -295,8 +295,23 @@ static int FetchPullRequestBySha(const char *repo_full_name,
 
 	root = FetchGithubApi(url);
 	if (root && json_is_array(root) && json_array_size(root) > 0) {
-		pr = json_array_get(root, 0);
-	} else {
+		// Find first PR whose base repo matches (skip fork PRs)
+		for (size_t i = 0; i < json_array_size(root); i++) {
+			json_t *candidate = json_array_get(root, i);
+			json_t *base = json_object_get(candidate, "base");
+			json_t *base_repo = json_is_object(base) ?
+				json_object_get(base, "repo") : NULL;
+			json_t *base_fn = json_is_object(base_repo) ?
+				json_object_get(base_repo, "full_name") : NULL;
+			if (json_is_string(base_fn) &&
+			  strcmp(json_string_value(base_fn), repo_full_name) == 0) {
+				pr = candidate;
+				break;
+			}
+		}
+	}
+
+	if (pr == NULL) {
 		if (root)
 			json_decref(root);
 
@@ -639,14 +654,30 @@ void ParseJsonData(char *json_data) {
 				repo_full_name = json_string_value(fn);
 		}
 
-		// Extract PR number from check_run.pull_requests[0].number
+		// Extract PR number from check_run.pull_requests[0].number,
+		// but only if the PR's base repo matches the event's repository.
+		// GitHub includes fork PRs in this array (e.g. a fork's sync PR
+		// tracking upstream master), which produces false associations.
 		int pr_number = 0;
 		json_t *prs = json_object_get(check, "pull_requests");
 		if (json_is_array(prs) && json_array_size(prs) > 0) {
 			json_t *pr_obj = json_array_get(prs, 0);
-			json_t *pr_num = json_object_get(pr_obj, "number");
-			if (json_is_integer(pr_num))
-				pr_number = json_integer_value(pr_num);
+			json_t *pr_base = json_object_get(pr_obj, "base");
+			json_t *pr_base_repo = json_is_object(pr_base) ?
+				json_object_get(pr_base, "repo") : NULL;
+			json_t *pr_base_repo_id = json_is_object(pr_base_repo) ?
+				json_object_get(pr_base_repo, "id") : NULL;
+			json_t *event_repo_id = json_is_object(repo) ?
+				json_object_get(repo, "id") : NULL;
+
+			if (json_is_integer(pr_base_repo_id) &&
+			  json_is_integer(event_repo_id) &&
+			  json_integer_value(pr_base_repo_id) ==
+			  json_integer_value(event_repo_id)) {
+				json_t *pr_num = json_object_get(pr_obj, "number");
+				if (json_is_integer(pr_num))
+					pr_number = json_integer_value(pr_num);
+			}
 		}
 
 		// Fetch PR title from GitHub API (may return NULL)
