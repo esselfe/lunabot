@@ -22,7 +22,7 @@
 
 #include "lunabot.h"
 
-const char *lunabot_version_string = "0.5.6";
+const char *lunabot_version_string = "0.6.0";
 
 struct GlobalVariables globals, **globals_ptr;
 char buffer[BUFFER_SIZE];
