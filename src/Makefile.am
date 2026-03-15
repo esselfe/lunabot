@@ -11,4 +11,9 @@ lunabot_SOURCES = lunabot.c lunabot.h
 lunabot_CFLAGS = $(MICROHTTPD_CFLAGS) $(JANSSON_CFLAGS) $(OPENSSL_CFLAGS) $(PTHREAD_CFLAGS) -D_DEFAULT_SOURCE
 lunabot_LDADD = $(JANSSON_LIBS) $(OPENSSL_LIBS) $(PTHREAD_LIBS)
 
+dist_doc_DATA = $(top_srcdir)/lunabot.conf.json $(top_srcdir)/README.md
+
+install-exec-hook:
+	rm -f $(DESTDIR)$(libdir)/liblunabot.la
+
 MAINTAINERCLEANFILES = Makefile.in
