@@ -1,6 +1,6 @@
 
 CFLAGS = -std=c17 -Wall -Wno-unused-but-set-variable -D_DEFAULT_SOURCE -O0
-LDFLAGS = -lpthread -lmicrohttpd -ljansson -lssl -lcrypto -ldl
+LDFLAGS = -lpthread -lmicrohttpd -ljansson -lssl -lcrypto -lcurl -ldl
 OBJDIR = obj
 OBJS = $(OBJDIR)/lunabot.o
 PROGNAME = lunabot
