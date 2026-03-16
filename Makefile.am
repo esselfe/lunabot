@@ -1,6 +1,6 @@
 ACLOCAL_AMFLAGS = -I m4
 
-SUBDIRS = src
+SUBDIRS = src src/lib
 
 EXTRA_DIST = lunabot.conf.json Makefile.simple README.md LICENSE CLAUDE.md
 

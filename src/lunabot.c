@@ -66,9 +66,9 @@ void ReloadLibrary(void) {
 	// the .so during in-tree builds), then fall back to the bare name so
 	// the system dynamic linker can resolve it via ld.so.conf for installed
 	// deployments.
-	handle = dlopen("./src/.libs/liblunabot.so", RTLD_LAZY);
+	handle = dlopen("./src/lib/.libs/liblunabot.so", RTLD_LAZY);
 	if (handle != NULL) {
-		fprintf(stderr, "lunabot::ReloadLibrary() loaded ./src/.libs/liblunabot.so\n");
+		fprintf(stderr, "lunabot::ReloadLibrary() loaded ./src/lib/.libs/liblunabot.so\n");
 	} else {
 		handle = dlopen("liblunabot.so", RTLD_LAZY);
 		if (handle != NULL) {

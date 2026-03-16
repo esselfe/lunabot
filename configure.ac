@@ -13,5 +13,5 @@ PKG_CHECK_MODULES([CURL], [libcurl])
 AX_PTHREAD([], [AC_MSG_ERROR([pthread is required])])
 AC_SEARCH_LIBS([dlopen], [dl], [], [AC_MSG_ERROR([dlopen is required])])
 
-AC_CONFIG_FILES([Makefile src/Makefile])
+AC_CONFIG_FILES([Makefile src/Makefile src/lib/Makefile])
 AC_OUTPUT

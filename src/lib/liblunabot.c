@@ -1,0 +1,1237 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <errno.h>
+#include <time.h>
+#include <sys/time.h>
+#include <pthread.h>
+#include <openssl/ssl.h>
+#include <microhttpd.h>
+#include <jansson.h>
+#include <curl/curl.h>
+
+#include "lunabot.h"
+
+struct GlobalVariables *libglobals;
+
+void Log(unsigned int direction, char *text) {
+	char *dirstr;
+	if (direction == LOCAL)
+		dirstr = "||";
+	else if (direction == IN)
+		dirstr = "<<";
+	else if (direction == OUT)
+		dirstr = ">>";
+	else
+		dirstr = "!!";
+	
+	time_t t0 = time(NULL);
+	struct tm *tm0 = (struct tm *)malloc(sizeof(struct tm));
+	gmtime_r(&t0, tm0);
+	struct timeval tv0;
+	gettimeofday(&tv0, NULL);
+
+	// Show message in console with colors
+	fprintf(stdout, "\033[00;36m%04d%02d%02d-%02d:%02d:%02d.%06ld %s"
+		"##\033[00m%s\033[00;36m##\033[00m\n", 
+		tm0->tm_year+1900, tm0->tm_mon+1, tm0->tm_mday,
+		tm0->tm_hour, tm0->tm_min, tm0->tm_sec, tv0.tv_usec,
+		dirstr, text);
+	
+	if (libglobals->disable_logging) {
+		free(tm0);
+		return;
+	}
+
+	FILE *log_fp = fopen(libglobals->log_filename, "a+");
+	if (log_fp == NULL) {
+		fprintf(stderr, "lunabot::Log() error: Cannot open '%s': %s\n",
+			libglobals->log_filename, strerror(errno));
+		exit(1);
+	}
+	
+	fprintf(log_fp, "%04d%02d%02d-%02d:%02d:%02d.%06ld %s##%s##\n",
+		tm0->tm_year+1900, tm0->tm_mon+1, tm0->tm_mday,
+		tm0->tm_hour, tm0->tm_min, tm0->tm_sec, tv0.tv_usec,
+		dirstr, text);
+
+	free(tm0);
+	fclose(log_fp);
+}
+
+// Function to send messages to the IRC channel
+void SendIrcMessage(const char *message) {
+	Log(OUT, (char *)message);
+	char buffer_msg[BUFFER_SIZE * 16];
+	snprintf(buffer_msg, sizeof(buffer_msg), "PRIVMSG %s :%s\r\n",
+		libglobals->channel, message);
+	SSL_write(libglobals->pSSL, buffer_msg, strlen(buffer_msg));
+}
+
+// Function to verify the GitHub webhook signature
+int VerifySignature_func(const char *payload, const char *signature) {
+	if (libglobals->debug)
+		fprintf(stderr, "VerifySignature() started\n");
+
+	unsigned int hash_len = 32;
+	unsigned char hash[hash_len];
+	char *secret_env = getenv("LUNABOT_WEBHOOK_SECRET");
+	char secret[BUFFER_SIZE];
+
+	unsigned int secret_len = 0;
+	if (secret_env != NULL)
+		secret_len = strlen(secret_env);
+
+	if (secret_env == NULL || secret_len == 0) {
+		memset(secret, 0, BUFFER_SIZE);
+
+		FILE *fp = fopen(".secret", "r");
+		if (fp == NULL) {
+			Log(LOCAL, "lunabot::VerifySignature(): .secret file not found!");
+			exit(1);
+		}
+		else {
+			fgets(secret, BUFFER_SIZE - 1, fp);
+			fclose(fp);
+		
+			// Strip newline ending
+			if (secret[strlen(secret)-1] == '\n')
+				secret[strlen(secret)-1] = '\0';
+		}
+	}
+	else
+		snprintf(secret, BUFFER_SIZE - 1, "%s", secret_env);
+
+	HMAC(EVP_sha256(), secret, strlen(secret), (unsigned char*)payload,
+		strlen(payload), hash, &hash_len);
+
+	char computed_signature[128];
+	memset(computed_signature, 0, 128);
+	snprintf(computed_signature, sizeof(computed_signature), "sha256=");
+	for (int i = 0; i < hash_len; i++)
+		snprintf(computed_signature + strlen(computed_signature), 3,
+			"%02x", hash[i]);
+
+	if (strlen(signature) != strlen(computed_signature))
+		return 1;
+
+	// Prevent timing attack
+	unsigned int is_invalid = 0;
+	unsigned int is_dummy = 0;
+	for (int i = 0; i < strlen(signature); i++) {
+		if (signature[i] != computed_signature[i])
+			is_invalid = 1;
+		else
+			is_dummy = 0;
+	}
+	return is_invalid;
+}
+
+char *SanitizeMessage(json_t *root, json_t *msg) {
+	size_t msg_text_len = json_string_length(msg);
+	if (msg_text_len < 1) {
+		char *str = malloc(7);
+		if (str == NULL) {
+			fprintf(stderr, "SanitizeMessage() error: malloc() failed!\n");
+			exit(1);
+			return NULL;
+		}
+		sprintf(str, "(null)");
+		return str;
+	}
+	
+	char *msg_text = malloc(msg_text_len + 1);
+	if (msg_text == NULL) {
+		fprintf(stderr, "SanitizeMessage() error: malloc() failed!\n");
+		exit(1);
+		return NULL;
+	}
+	memset(msg_text, 0, msg_text_len + 1);
+	
+	const char *msg_text_orig = json_string_value(msg);
+	const char *c = msg_text_orig;
+	unsigned int msg_cnt = 0;
+	while (*c != '\0') {
+		if (*c == '\n' || *c == '\r' || *c == '\a' || *c == '\033')
+			msg_text[msg_cnt] = ' ';
+		else
+			msg_text[msg_cnt] = msg_text_orig[msg_cnt];
+
+		++c;
+		++msg_cnt;
+	}
+	
+	return msg_text;
+}
+
+static const char *StripGithubApiPrefix(const char *url) {
+	const char *prefix = "https://api.github.com/repos/";
+	unsigned int prefix_len = strlen(prefix);
+
+	if (strncmp(url, prefix, prefix_len) == 0)
+		return url + prefix_len;
+
+	return url;
+}
+
+struct CurlBuffer {
+	char *data;
+	size_t size;
+};
+
+static size_t CurlWriteCallback(void *contents, size_t size, size_t nmemb,
+  void *userp) {
+	size_t realsize = size * nmemb;
+	struct CurlBuffer *buf = (struct CurlBuffer *)userp;
+
+	char *ptr = realloc(buf->data, buf->size + realsize + 1);
+	if (ptr == NULL) {
+		Log(LOCAL, "CurlWriteCallback: realloc failed");
+		return 0;
+	}
+
+	buf->data = ptr;
+	memcpy(&(buf->data[buf->size]), contents, realsize);
+	buf->size += realsize;
+	buf->data[buf->size] = '\0';
+
+	return realsize;
+}
+
+// Fetch a URL from the GitHub API. Returns parsed JSON or NULL on failure.
+// Caller must call json_decref() on the returned object.
+static json_t *FetchGithubApi(const char *url) {
+	CURL *curl = curl_easy_init();
+	if (curl == NULL) {
+		Log(LOCAL, "FetchGithubApi: curl_easy_init failed");
+		return NULL;
+	}
+
+	struct CurlBuffer response = { .data = malloc(1), .size = 0 };
+	if (response.data == NULL) {
+		Log(LOCAL, "FetchGithubApi: malloc failed");
+		curl_easy_cleanup(curl);
+		return NULL;
+	}
+	response.data[0] = '\0';
+
+	curl_easy_setopt(curl, CURLOPT_URL, url);
+	curl_easy_setopt(curl, CURLOPT_USERAGENT, "lunabot");
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCallback);
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&response);
+	curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+
+	CURLcode res = curl_easy_perform(curl);
+	if (res != CURLE_OK) {
+		char errbuf[BUFFER_SIZE];
+		snprintf(errbuf, sizeof(errbuf),
+			"FetchGithubApi: curl error for %s: %s",
+			url, curl_easy_strerror(res));
+		Log(LOCAL, errbuf);
+		free(response.data);
+		curl_easy_cleanup(curl);
+		return NULL;
+	}
+
+	curl_easy_cleanup(curl);
+
+	json_t *root;
+	json_error_t error;
+	root = json_loads(response.data, 0, &error);
+	free(response.data);
+
+	if (!root) {
+		char errbuf[BUFFER_SIZE];
+		snprintf(errbuf, sizeof(errbuf),
+			"FetchGithubApi: JSON parse error: %s",
+			error.text);
+		Log(LOCAL, errbuf);
+		return NULL;
+	}
+
+	return root;
+}
+
+static char *FetchPullRequestTitle(const char *repo_full_name, int pr_number) {
+	char url[BUFFER_SIZE];
+	snprintf(url, sizeof(url),
+		"https://api.github.com/repos/%s/pulls/%d",
+		repo_full_name, pr_number);
+
+	json_t *root = FetchGithubApi(url);
+	if (!root)
+		return NULL;
+
+	json_t *title = json_object_get(root, "title");
+	if (!json_is_string(title)) {
+		Log(LOCAL, "FetchPullRequestTitle: no title field in response");
+		json_decref(root);
+		return NULL;
+	}
+
+	char *title_text = SanitizeMessage(root, title);
+	json_decref(root);
+
+	return title_text;
+}
+
+// Look up PR number and title by commit SHA using the GitHub API.
+// Tries GET /repos/{owner}/{repo}/commits/{sha}/pulls first, then
+// falls back to the search API (needed for fork PRs where the
+// commits endpoint returns an empty array).
+// Sets *out_number and *out_title on success. Caller must free *out_title.
+// Returns 0 on success, 1 on failure.
+static int FetchPullRequestBySha(const char *repo_full_name,
+  const char *head_sha, int *out_number, char **out_title) {
+	char url[BUFFER_SIZE];
+	json_t *root = NULL;
+	json_t *pr = NULL;
+
+	// Try commits/{sha}/pulls first (works for non-fork PRs)
+	snprintf(url, sizeof(url),
+		"https://api.github.com/repos/%s/commits/%s/pulls",
+		repo_full_name, head_sha);
+
+	root = FetchGithubApi(url);
+	if (root && json_is_array(root) && json_array_size(root) > 0) {
+		// Find first PR whose base repo matches (skip fork PRs)
+		for (size_t i = 0; i < json_array_size(root); i++) {
+			json_t *candidate = json_array_get(root, i);
+			json_t *base = json_object_get(candidate, "base");
+			json_t *base_repo = json_is_object(base) ?
+				json_object_get(base, "repo") : NULL;
+			json_t *base_fn = json_is_object(base_repo) ?
+				json_object_get(base_repo, "full_name") : NULL;
+			if (json_is_string(base_fn) &&
+			  strcmp(json_string_value(base_fn), repo_full_name) == 0) {
+				pr = candidate;
+				break;
+			}
+		}
+	}
+
+	if (pr == NULL) {
+		if (root)
+			json_decref(root);
+
+		// Fallback: search API (needed for fork PRs)
+		snprintf(url, sizeof(url),
+			"https://api.github.com/search/issues"
+			"?q=repo:%s+type:pr+SHA:%s",
+			repo_full_name, head_sha);
+
+		root = FetchGithubApi(url);
+		if (!root)
+			return 1;
+
+		json_t *items = json_object_get(root, "items");
+		if (!json_is_array(items) || json_array_size(items) == 0) {
+			Log(LOCAL, "FetchPullRequestBySha: no PRs found for SHA");
+			json_decref(root);
+			return 1;
+		}
+		pr = json_array_get(items, 0);
+	}
+
+	json_t *number = json_object_get(pr, "number");
+	json_t *title = json_object_get(pr, "title");
+
+	if (!json_is_integer(number)) {
+		json_decref(root);
+		return 1;
+	}
+
+	*out_number = json_integer_value(number);
+	*out_title = NULL;
+
+	if (json_is_string(title))
+		*out_title = SanitizeMessage(root, title);
+
+	json_decref(root);
+	return 0;
+}
+
+// Check whether a label event should be skipped based on config flags
+// and repository name. Returns 1 to skip, 0 to process.
+static int ShouldSkipLabelEvent(json_t *root) {
+	if (libglobals->ignore_labels)
+		return 1;
+
+	if (libglobals->only_core_labels) {
+		json_t *repo = json_object_get(root, "repository");
+		json_t *repo_name = json_is_object(repo) ?
+			json_object_get(repo, "name") : NULL;
+		if (json_is_string(repo_name) &&
+		  strcmp(json_string_value(repo_name), "moonbase-core") != 0)
+			return 1;
+	}
+
+	return 0;
+}
+
+void ParseJsonData(char *json_data) {
+	if (libglobals->debug)
+		fprintf(stderr, "ParseJsonData() started\n");
+
+	char buffer[BUFFER_SIZE];
+	json_t *root;
+	json_error_t error;
+	root = json_loads(json_data, 0, &error);
+
+	if (!root) {
+		sprintf(buffer, "JSON parsing error: %s", error.text);
+		Log(LOCAL, buffer);
+		return;
+	}
+
+	// Process CI build statuses
+	json_t *context = json_object_get(root, "context");
+	if (json_is_string(context)) {
+		if (strcmp(json_string_value(context), libglobals->context_name) != 0) {
+			json_decref(root);
+			return;
+		}
+
+		json_t *status = json_object_get(root, "state");
+		if (!json_is_string(status)) {
+			json_decref(root);
+			return;
+		}
+		json_t *target_url = json_object_get(root, "target_url");
+		// Wait for the second event, the first one doesn't have target_url set
+		if (json_is_string(target_url) && strlen(json_string_value(target_url)) == 0) {
+			json_decref(root);
+			return;
+		}
+		json_t *commit_outer = json_object_get(root, "commit");
+		if (!json_is_object(commit_outer)) {
+			json_decref(root);
+			return;
+		}
+		json_t *commit_inner = json_object_get(commit_outer, "commit");
+		if (!json_is_object(commit_inner)) {
+			json_decref(root);
+			return;
+		}
+		json_t *msg = json_object_get(commit_inner, "message");
+		if (!json_is_string(msg)) {
+			json_decref(root);
+			return;
+		}
+		char *msg_text = SanitizeMessage(root, msg);
+		char *msg_text_limited = malloc(128);
+		if (msg_text_limited == NULL) {
+			sprintf(buffer, "JSON parsing error: malloc() returned NULL!");
+			Log(LOCAL, buffer);
+			return;
+		}
+		snprintf(msg_text_limited, 128, "%s", msg_text);
+
+		char *color;
+		char *status_str = strdup(json_string_value(status));
+		if (strcmp(status_str, "pending") == 0) {
+			// Reduce message volume and skip those
+			if (libglobals->ignore_pending) {
+				free(msg_text);
+				free(msg_text_limited);
+				free(status_str);
+				json_decref(root);
+				return;
+			}
+			*status_str = 'P';
+			color = YELLOW;
+		}
+		else if (strcmp(status_str, "success") == 0) {
+			*status_str = 'S';
+			color = GREEN;
+		}
+		else if (strcmp(status_str, "failure") == 0 ||
+			 strcmp(status_str, "error") == 0) {
+			snprintf(buffer, sizeof(buffer),
+				"[%sFailed%s]:    '%s' %s",
+				RED, NORMAL,
+				msg_text_limited,
+				json_string_value(target_url));
+			SendIrcMessage(buffer);
+			free(msg_text);
+			free(msg_text_limited);
+			free(status_str);
+
+			json_decref(root);
+			return;
+		}
+
+		snprintf(buffer, sizeof(buffer),
+			"[%s%s%s]:   '%s' %s",
+			color, status_str, NORMAL,
+			msg_text_limited, 
+			json_string_value(target_url));
+		SendIrcMessage(buffer);
+		
+		free(msg_text);
+		free(msg_text_limited);
+		free(status_str);
+		json_decref(root);
+		return;
+	}
+	
+	// Process PR ops
+	json_t *action = json_object_get(root, "action");
+	json_t *pr = json_object_get(root, "pull_request");
+	if (json_is_string(action) && json_is_object(pr)) {
+		if (strcmp(json_string_value(action), "labeled") == 0) {
+			if (ShouldSkipLabelEvent(root)) {
+				json_decref(root);
+				return;
+			}
+
+			json_t *sender = json_object_get(root, "sender");
+			if (!json_is_object(sender)) {
+				json_decref(root);
+				return;
+			}
+			json_t *username = json_object_get(sender, "login");
+			json_t *title = json_object_get(pr, "title");
+			if (!json_is_string(title)) {
+				json_decref(root);
+				return;
+			}
+			char *title_text = SanitizeMessage(root, title);
+
+			json_t *url = json_object_get(pr, "html_url");
+			json_t *label = json_object_get(root, "label");
+			json_t *label_name = json_object_get(label, "name");
+			snprintf(buffer, sizeof(buffer),
+				"[%sLabels%s]:    %s added the '%s' label to '%s' - %s",
+				LIGHT_GREEN, NORMAL,
+				json_string_value(username),
+				json_string_value(label_name),
+				title_text,
+				json_string_value(url));
+			SendIrcMessage(buffer);
+			free(title_text);
+			json_decref(root);
+			return;
+		}
+		else if (strcmp(json_string_value(action), "unlabeled") == 0) {
+			if (ShouldSkipLabelEvent(root)) {
+				json_decref(root);
+				return;
+			}
+
+			json_t *sender = json_object_get(root, "sender");
+			if (!json_is_object(sender)) {
+				json_decref(root);
+				return;
+			}
+			json_t *username = json_object_get(sender, "login");
+			json_t *title = json_object_get(pr, "title");
+			if (!json_is_string(title)) {
+				json_decref(root);
+				return;
+			}
+			char *title_text = SanitizeMessage(root, title);
+
+			json_t *url = json_object_get(pr, "html_url");
+			json_t *label = json_object_get(root, "label");
+			json_t *label_name = json_object_get(label, "name");
+			snprintf(buffer, sizeof(buffer),
+				"[%sLabels%s]:    %s removed the '%s' label to '%s' - %s",
+				LIGHT_GREEN, NORMAL,
+				json_string_value(username),
+				json_string_value(label_name),
+				title_text,
+				json_string_value(url));
+			SendIrcMessage(buffer);
+			free(title_text);
+			json_decref(root);
+			return;
+		}
+		else if (strcmp(json_string_value(action), "opened") == 0) {
+			json_t *title = json_object_get(pr, "title");
+			if (!json_is_string(title)) {
+				json_decref(root);
+				return;
+			}
+			char *title_text = SanitizeMessage(root, title);
+
+			json_t *user = json_object_get(json_object_get(pr, "user"), "login");
+			json_t *url = json_object_get(pr, "html_url");
+
+			if (json_is_string(title) && json_is_string(user) && json_is_string(url)) {
+				snprintf(buffer, sizeof(buffer), 
+					"[%sNew PR%s]:    '%s' from %s - %s",
+					GREEN, NORMAL,
+					title_text, 
+					json_string_value(user), 
+					json_string_value(url));
+				SendIrcMessage(buffer);
+				free(title_text);
+				json_decref(root);
+				return;
+			}
+		}
+		else if (strcmp(json_string_value(action), "closed") == 0) {
+			json_t *title = json_object_get(pr, "title");
+			if (!json_is_string(title)) {
+				json_decref(root);
+				return;
+			}
+			char *title_text = SanitizeMessage(root, title);
+
+			json_t *user = json_object_get(json_object_get(pr, "user"), "login");
+			json_t *url = json_object_get(pr, "html_url");
+			json_t *is_merged = json_object_get(pr, "merged");
+			if (is_merged != NULL && json_is_true(is_merged)) {
+				if (json_is_string(title) && json_is_string(user) && json_is_string(url)) {
+					snprintf(buffer, sizeof(buffer),
+						"[%sMerged PR%s]: '%s' from %s - %s",
+						CYAN, NORMAL,
+						title_text,
+						json_string_value(user),
+						json_string_value(url));
+					SendIrcMessage(buffer);
+					free(title_text);
+					json_decref(root);
+					return;
+				}
+			}
+			else {
+				if (json_is_string(title) && json_is_string(user) && json_is_string(url)) {
+					snprintf(buffer, sizeof(buffer),
+						"[%sClosed PR%s]: '%s' from %s - %s",
+						RED, NORMAL,
+						title_text,
+						json_string_value(user),
+						json_string_value(url));
+					SendIrcMessage(buffer);
+					free(title_text);
+					json_decref(root);
+					return;
+				}
+			}
+		}
+	}
+	
+	// Process check runs
+	json_t *check = json_object_get(root, "check_run");
+	if (check != NULL) {
+		json_t *name = json_object_get(check, "name");
+		if (!json_is_string(name)) {
+			json_decref(root);
+			return;
+		}
+
+		// Only handle "lint" check runs
+		if (strcmp(json_string_value(name), "lint") != 0) {
+			json_decref(root);
+			return;
+		}
+
+		json_t *check_status = json_object_get(check, "status");
+		if (!json_is_string(check_status) ||
+		  strcmp(json_string_value(check_status), "completed") != 0) {
+			json_decref(root);
+			return;
+		}
+
+		json_t *check_conclusion = json_object_get(check, "conclusion");
+		if (!json_is_string(check_conclusion)) {
+			json_decref(root);
+			return;
+		}
+
+		const char *conclusion = json_string_value(check_conclusion);
+		json_t *html_url = json_object_get(check, "html_url");
+
+		// Get repo full name from repository.full_name
+		const char *repo_full_name = NULL;
+		json_t *repo = json_object_get(root, "repository");
+		if (json_is_object(repo)) {
+			json_t *fn = json_object_get(repo, "full_name");
+			if (json_is_string(fn))
+				repo_full_name = json_string_value(fn);
+		}
+
+		// Extract PR number from check_run.pull_requests[0].number,
+		// but only if the PR's base repo matches the event's repository.
+		// GitHub includes fork PRs in this array (e.g. a fork's sync PR
+		// tracking upstream master), which produces false associations.
+		int pr_number = 0;
+		json_t *prs = json_object_get(check, "pull_requests");
+		if (json_is_array(prs) && json_array_size(prs) > 0) {
+			json_t *pr_obj = json_array_get(prs, 0);
+			json_t *pr_base = json_object_get(pr_obj, "base");
+			json_t *pr_base_repo = json_is_object(pr_base) ?
+				json_object_get(pr_base, "repo") : NULL;
+			json_t *pr_base_repo_id = json_is_object(pr_base_repo) ?
+				json_object_get(pr_base_repo, "id") : NULL;
+			json_t *event_repo_id = json_is_object(repo) ?
+				json_object_get(repo, "id") : NULL;
+
+			if (json_is_integer(pr_base_repo_id) &&
+			  json_is_integer(event_repo_id) &&
+			  json_integer_value(pr_base_repo_id) ==
+			  json_integer_value(event_repo_id)) {
+				json_t *pr_num = json_object_get(pr_obj, "number");
+				if (json_is_integer(pr_num))
+					pr_number = json_integer_value(pr_num);
+			}
+		}
+
+		// Fetch PR title from GitHub API (may return NULL)
+		char *pr_title = NULL;
+
+		// If pull_requests[] is empty (common with fork PRs),
+		// look up the PR by commit SHA via the GitHub API
+		if (pr_number == 0 && repo_full_name != NULL) {
+			json_t *head_sha = json_object_get(check, "head_sha");
+			if (json_is_string(head_sha)) {
+				FetchPullRequestBySha(repo_full_name,
+					json_string_value(head_sha),
+					&pr_number, &pr_title);
+			}
+		}
+
+		if (pr_number > 0 && pr_title == NULL && repo_full_name != NULL)
+			pr_title = FetchPullRequestTitle(repo_full_name, pr_number);
+
+		if (strcmp(conclusion, "failure") == 0) {
+			if (pr_number > 0 && repo_full_name != NULL) {
+				snprintf(buffer, sizeof(buffer),
+					"[%sChecks%s]:    lint failed for PR #%d '%s' - "
+					"https://github.com/%s/pull/%d | %s",
+					RED, NORMAL,
+					pr_number,
+					pr_title ? pr_title : "(unknown)",
+					repo_full_name, pr_number,
+					json_is_string(html_url) ?
+						json_string_value(html_url) : "");
+			} else {
+				snprintf(buffer, sizeof(buffer),
+					"[%sChecks%s]:    lint failed - %s",
+					RED, NORMAL,
+					json_is_string(html_url) ?
+						json_string_value(html_url) : "");
+			}
+			SendIrcMessage(buffer);
+		}
+		else if (strcmp(conclusion, "success") == 0) {
+			if (pr_number > 0 && repo_full_name != NULL) {
+				snprintf(buffer, sizeof(buffer),
+					"[%sChecks%s]:    lint passed for PR #%d '%s' - "
+					"https://github.com/%s/pull/%d",
+					GREEN, NORMAL,
+					pr_number,
+					pr_title ? pr_title : "(unknown)",
+					repo_full_name, pr_number);
+			} else {
+				snprintf(buffer, sizeof(buffer),
+					"[%sChecks%s]:    lint passed",
+					GREEN, NORMAL);
+			}
+			SendIrcMessage(buffer);
+		}
+
+		free(pr_title);
+		json_decref(root);
+		return;
+	}
+	
+	// Process push commits
+	json_t *ref = json_object_get(root, "refs");
+	json_t *commits = json_object_get(root, "commits");
+	json_t *committer;
+	json_t *username;
+	json_t *msg;
+	json_t *url;
+	if (ref != NULL && commits != NULL) {
+		if (libglobals->ignore_commits) {
+			json_decref(root);
+			return;
+		}
+		
+		if (strcmp(json_string_value(ref), "refs/head/master") != 0) {
+			json_decref(root);
+			return;
+		}
+
+		int arrlen = json_array_size(commits);
+		int cnt;
+		for (cnt = 0; cnt < arrlen; cnt++) {
+			json_t *arrobj = json_array_get(commits, cnt);
+			
+			committer = json_object_get(arrobj, "committer");
+			if (json_is_object(committer))
+				username = json_object_get(committer, "username");	
+
+			msg = json_object_get(arrobj, "message");
+			url = json_object_get(arrobj, "url");
+			
+			if (json_is_string(username) && json_is_string(msg) &&
+			  json_is_string(url)) {
+				char *msg_text = SanitizeMessage(root, msg);
+
+				snprintf(buffer, sizeof(buffer),
+					"[%sCommits%s]:   '%s' from %s - %s",
+					CYAN, NORMAL,
+					msg_text,
+					json_string_value(username),
+					json_string_value(url));
+				SendIrcMessage(buffer);
+				
+				free(msg_text);
+				json_decref(root);
+				return;
+			}
+		}
+	}
+
+	Log(LOCAL, "Got webhook data without a conditional branch for it!");
+
+	json_decref(root);
+}
+
+void ReplayJsonPayload(char *filename) {
+	FILE *fp = fopen(filename, "r");
+	if (fp == NULL) {
+		char buffer_tmp[1024];
+		sprintf(buffer_tmp, "ReplayJsonPayload() error: cannot open '%s': %s",
+			filename, strerror(errno));
+		Log(LOCAL, buffer_tmp);
+		return;
+	}
+	
+	fseek(fp, 0, SEEK_END);
+	unsigned long filesize = ftell(fp);
+	fseek(fp, 0, SEEK_SET);
+	
+	char *payload = malloc(filesize + 1);
+	memset(payload, 0, filesize + 1);
+	if (payload == NULL) {
+		Log(LOCAL, "ReplayJsonPayload() error: cannot allocate memory!");
+		fclose(fp);
+		return;
+	}
+	
+	int ret = fread(payload, filesize, 1, fp);
+	if (ret > 0)
+		ParseJsonData(payload);
+	
+	free(payload);
+	fclose(fp);
+}
+
+void *HealthCheckTimeoutFunc(void *argp) {
+	time_t current, start = time(NULL);
+	while (libglobals->health_check == 1) {
+		current = time(NULL);
+		if (current > start + 10) {
+			libglobals->health_check = -1;
+			break;
+		}
+		else
+			sleep(1);
+	}
+	
+	return NULL;
+}
+
+void HealthCheckTimeoutStart(void) {
+	pthread_t health_thread;
+	pthread_attr_t attr;
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+	pthread_create(&health_thread, &attr, HealthCheckTimeoutFunc, NULL);
+	pthread_detach(health_thread);
+	pthread_attr_destroy(&attr);
+}
+
+static enum MHD_Result HandleHealthCheck(struct MHD_Connection *connection) {
+	// Ratelimit requests to prevent abuse
+	libglobals->health_check_t0 = time(NULL);
+	if (libglobals->health_check_t0 >
+	  libglobals->health_check_tprev + libglobals->health_check_wait) {
+		libglobals->health_check_tprev = libglobals->health_check_t0;
+
+		libglobals->health_check = 1;
+		char buffer2[BUFFER_SIZE];
+		sprintf(buffer2, "PING NickServ\r\n");
+		SSL_write(libglobals->pSSL, buffer2, strlen(buffer2));
+
+		HealthCheckTimeoutStart();
+
+		while (libglobals->health_check == 1)
+			sleep(1);
+	}
+	else {
+		sleep(1);
+		libglobals->health_check = 2;
+	}
+
+	if (libglobals->health_check < 0) {
+		libglobals->health_check = 0;
+		char *data = "<html><body><h2>500 Service error</h2></body></html>";
+		struct MHD_Response *response500;
+		response500 = MHD_create_response_from_buffer(strlen(data),
+				data, MHD_RESPMEM_PERSISTENT);
+		int ret = MHD_queue_response(connection, 500, response500);
+		MHD_destroy_response(response500);
+		return ret;
+	}
+
+	libglobals->health_check = 0;
+	char *data = "<html><body><h2>200 OK</h2></body></html>";
+	struct MHD_Response *response200;
+	response200 = MHD_create_response_from_buffer(strlen(data),
+			data, MHD_RESPMEM_PERSISTENT);
+	int ret = MHD_queue_response(connection, 200, response200);
+	MHD_destroy_response(response200);
+	return ret;
+}
+
+// HTTP request handler
+enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connection,
+		const char *url, const char *method,
+		const char *version, const char *upload_data,
+		unsigned long *upload_data_size, void **ptr) {
+	static char *json_buffer = NULL;
+	static unsigned int json_buffer_size = BUFFER_SIZE * 16;
+	static size_t total_size = 0;
+	static unsigned int cnt = 0;
+
+	if (url && strcmp(method, MHD_HTTP_METHOD_GET) == 0 &&
+	  strcmp(url, "/health") == 0)
+		return HandleHealthCheck(connection);
+	
+	// Only accept POST requests
+	if (strcmp(method, MHD_HTTP_METHOD_POST) != 0) {
+		char *data = "<html><body><h2>401 Unauthorized</h2></body></html>";
+		struct MHD_Response *response401;
+		response401 = MHD_create_response_from_buffer(strlen(data),
+				data, MHD_RESPMEM_PERSISTENT);
+		int ret = MHD_queue_response(connection, 401, response401);
+		MHD_destroy_response(response401);
+		return ret;
+	}
+
+	const char *signature = MHD_lookup_connection_value(connection,
+					MHD_HEADER_KIND, "X-Hub-Signature-256");
+	if (!signature) {
+		char *data = "<html><body><h2>401 Unauthorized</h2></body></html>";
+		struct MHD_Response *response401;
+		response401 = MHD_create_response_from_buffer(strlen(data),
+				data, MHD_RESPMEM_PERSISTENT);
+		int ret = MHD_queue_response(connection, 401, response401);
+		MHD_destroy_response(response401);
+		Log(LOCAL, "Webhook signature missing from the HTTP header!");
+		return ret;
+	}
+
+	// On first call, initialize buffer
+	if (*ptr == NULL) {
+		json_buffer = malloc(json_buffer_size); // Initial allocation (adjust as needed)
+		if (!json_buffer) {
+			Log(LOCAL, "lunabot::WebhookCallback() error: Cannot allocate memory");
+			return MHD_NO;
+		}
+		memset(json_buffer, 0, json_buffer_size);
+		total_size = 0;
+		cnt = 0;
+		*ptr = json_buffer;
+	}
+
+	// First pass is empty
+	if (*upload_data_size == 0 && cnt == 0)
+		return MHD_YES; // Continue receiving
+	// If there is new data, append it to the buffer
+	else if (*upload_data_size > 0) {
+		++cnt;
+		size_t new_size = total_size + *upload_data_size;
+
+		// Reallocate buffer if needed
+		if (new_size >= json_buffer_size) {  // Adjust buffer size if needed
+			json_buffer_size = new_size + 1;
+			char *temp = realloc(json_buffer, json_buffer_size);
+			if (!temp) {
+				Log(LOCAL, "lunabot::WebhookCallback() error: Cannot allocate memory");
+				free(json_buffer);
+				return MHD_NO;
+			}
+			json_buffer = temp;
+			*ptr = json_buffer;
+		}
+
+		// Append new data
+		memcpy(json_buffer + total_size, upload_data, *upload_data_size);
+		total_size += *upload_data_size;
+		json_buffer[total_size] = '\0'; // Null-terminate
+
+		*upload_data_size = 0;
+		return MHD_YES; // Continue receiving
+	}
+	// If we have all data, process JSON
+	else if (*upload_data_size == 0 && cnt >= 1) {
+		Log(LOCAL, "Received full webhook JSON:");
+		Log(IN, json_buffer);
+
+		cnt = 0;
+
+		if (VerifySignature_func(json_buffer, signature)) {
+			char *data = "<html><body><h2>401 Unauthorized</h2></body></html>";
+			struct MHD_Response *response401;
+			response401 = MHD_create_response_from_buffer(strlen(data),
+					data, MHD_RESPMEM_PERSISTENT);
+			int ret = MHD_queue_response(connection, 401, response401);
+			MHD_destroy_response(response401);
+			Log(LOCAL, "Webhook signature verification failed!");
+			return ret;
+		}
+
+		ParseJsonData(json_buffer);
+	}
+
+	// Clean up and send response
+	free(json_buffer);
+	json_buffer_size = BUFFER_SIZE * 16;
+	*ptr = NULL;
+	total_size = 0;
+	cnt = 0;
+
+	struct MHD_Response *response = MHD_create_response_from_buffer(16, "OK", MHD_RESPMEM_PERSISTENT);
+	int ret = MHD_queue_response(connection, MHD_HTTP_OK, response);
+	MHD_destroy_response(response);
+	
+	return ret;
+}
+
+void FreeRawLine(struct RawLine *rawp) {
+	if (rawp->nick != NULL)
+		free(rawp->nick);
+	if (rawp->username != NULL)
+		free(rawp->username);
+	if (rawp->host != NULL)
+		free(rawp->host);
+	if (rawp->command != NULL)
+		free(rawp->command);
+	if (rawp->channel != NULL)
+		free(rawp->channel);
+	if (rawp->text != NULL)
+		free(rawp->text);
+
+	free(rawp);
+}
+
+struct RawLine *ParseRawLine(char *line) {
+	if (libglobals->debug)
+		Log(LOCAL, "ParseRawLine() started");
+
+	char buffer[BUFFER_SIZE];
+	char *c = line;
+	unsigned int cnt = 0;
+	// Recording flags
+	unsigned int rec_nick = 1, rec_username = 0, rec_host = 0;
+	unsigned int rec_command = 0, rec_channel = 0, rec_text = 0;
+	unsigned int word_size = 128;
+	char word[word_size];
+	
+	// Messages to skip:
+	if (strncmp(line, "NickServ!", 9) == 0 || strncmp(line, "ChanServ!", 9) == 0)
+		return NULL;
+	else if (strncmp(line, "PING :", 6) == 0)
+		return NULL;
+	else if (strncmp(line, "ERROR :", 7) == 0)
+		return NULL;
+
+	// Check the theorical raw.command field for raw lines to skip
+	while (1) {
+		if (*c == '\0')
+			break;
+		else if (*c == ' ') { // process at the first space encountered,
+			++c;
+			if ((*c >= '0' && *c <= '9') || strncmp(c, "MODE ", 5) == 0 ||
+				strncmp(c, "NOTICE ", 7) == 0)
+				return NULL;
+			else if (strncmp(c, "PONG ", 5) == 0) {
+				if (libglobals->health_check == 1) {
+					libglobals->health_check = 2;
+					return NULL;
+				}
+			}
+			else
+				break;
+		}
+		++c;
+	}
+	
+	struct RawLine *rawp = malloc(sizeof(struct RawLine));
+	if (rawp == NULL) {
+		Log(LOCAL, "lunabot::ParseRawLine(): Cannot allocate memory");
+		return NULL;
+	}
+	else
+		memset(rawp, 0, sizeof(struct RawLine));
+
+	rawp->nick = malloc(word_size+1);
+	if (rawp->nick == NULL) {
+		Log(LOCAL, "lunabot::ParseRawLine(): Cannot allocate memory");
+		FreeRawLine(rawp);
+		return NULL;
+	}
+	rawp->username = malloc(word_size+1);
+	if (rawp->username == NULL) {
+		Log(LOCAL, "lunabot::ParseRawLine(): Cannot allocate memory");
+		FreeRawLine(rawp);
+		return NULL;
+	}
+	rawp->host = malloc(word_size+1);
+	if (rawp->host == NULL) {
+		Log(LOCAL, "lunabot::ParseRawLine(): Cannot allocate memory");
+		FreeRawLine(rawp);
+		return NULL;
+	}
+	rawp->command = malloc(word_size+1);
+	if (rawp->command == NULL) {
+		Log(LOCAL, "lunabot::ParseRawLine(): Cannot allocate memory");
+		FreeRawLine(rawp);
+		return NULL;
+	}
+	rawp->channel = malloc(word_size+1);
+	if (rawp->channel == NULL) {
+		Log(LOCAL, "lunabot::ParseRawLine(): Cannot allocate memory");
+		FreeRawLine(rawp);
+		return NULL;
+	}
+	rawp->text = malloc(word_size+1);
+	if (rawp->text == NULL) {
+		Log(LOCAL, "lunabot::ParseRawLine(): Cannot allocate memory");
+		FreeRawLine(rawp);
+		return NULL;
+	}
+
+	c = line;
+	unsigned int cnt_total = 0;
+	while (1) {
+		if (*c == ':' && cnt_total == 0) {
+			memset(word, 0, word_size);
+			++c;
+			if (libglobals->debug) {
+				sprintf(buffer, "  raw: <<%s>>", line);
+				Log(LOCAL, buffer);
+			}
+			continue;
+		}
+		else if (rec_nick && *c == '!') {
+			sprintf(rawp->nick, "%s", word);
+			memset(word, 0, word_size);
+			rec_nick = 0;
+			rec_username = 1;
+			cnt = 0;
+			if (libglobals->debug) {
+				sprintf(buffer, "  nick: <%s>", rawp->nick);
+				Log(LOCAL, buffer);
+			}
+		}
+		else if (rec_username && cnt == 0 && *c == '~') {
+			++c;
+			continue;
+		}
+		else if (rec_username && *c == '@') {
+			sprintf(rawp->username, "%s", word);
+			memset(word, 0, word_size);
+			rec_username = 0;
+			rec_host = 1;
+			cnt = 0;
+			if (libglobals->debug) {
+				sprintf(buffer, "  username: <%s>", rawp->username);
+				Log(LOCAL, buffer);
+			}
+		}
+		else if (rec_host && *c == ' ') {
+			sprintf(rawp->host, "%s", word);
+			memset(word, 0, word_size);
+			rec_host = 0;
+			rec_command = 1;
+			cnt = 0;
+			if (libglobals->debug) {
+				sprintf(buffer, "  host: <%s>", rawp->host);
+				Log(LOCAL, buffer);
+			}
+		}
+		else if (rec_command && *c == ' ') {
+			sprintf(rawp->command, "%s", word);
+			memset(word, 0, word_size);
+			rec_command = 0;
+			rec_channel = 1;
+			cnt = 0;
+			if (libglobals->debug) {
+				sprintf(buffer, "  command: <%s>", rawp->command);
+				Log(LOCAL, buffer);
+			}
+		}
+		else if (rec_channel && *c == ' ') {
+			sprintf(rawp->channel, "%s", word);
+			memset(word, 0, word_size);
+			rec_channel = 0;
+			if (strcmp(rawp->command, "PRIVMSG") == 0)
+				rec_text = 1;
+			cnt = 0;
+			if (libglobals->debug) {
+				sprintf(buffer, "  channel: <%s>", rawp->channel);
+				Log(LOCAL, buffer);
+			}
+		}
+		else if (rec_text && *c == '\0') {
+			sprintf(rawp->text, "%s", word);
+			memset(word, 0, word_size);
+			rec_text = 0;
+			cnt = 0;
+			if (libglobals->debug) {
+				sprintf(buffer, "  text: <%s>", rawp->text);
+				Log(LOCAL, buffer);
+			}
+			break;
+		}
+		else {
+			if (rec_text && *c == ':' && strlen(word) == 0) {
+				++c;
+				continue;
+			}
+			else
+				word[cnt++] = *c;
+		}
+
+		++cnt_total;
+		++c;
+		if (!rec_text && (*c == '\0' || *c == '\n'))
+			break;
+	}
+
+	if (libglobals->debug)
+		Log(LOCAL, "ParseRawLine() ended\n");
+	
+	return rawp;
+}
+
+void liblunabotInit(void) {
+	if (libglobals->httpdaemon != NULL)
+		MHD_stop_daemon(libglobals->httpdaemon);
+
+	libglobals->httpdaemon = MHD_start_daemon(MHD_USE_SELECT_INTERNALLY,
+				libglobals->webhook_port, NULL, NULL,
+				WebhookCallback, NULL, MHD_OPTION_END);
+	if (!libglobals->httpdaemon) {
+		Log(LOCAL, "lunabot::WebhookServerStart(): Failed to start HTTP server");
+		libglobals->mainloopend = 1;
+	}
+	else {
+		char buffer[1024];
+		sprintf(buffer, "Webhook server running on port %d",
+			libglobals->webhook_port);
+		Log(LOCAL, buffer);
+	}
+	
+	libglobals->health_check_tprev = time(NULL) - libglobals->health_check_wait - 1;
+}
+

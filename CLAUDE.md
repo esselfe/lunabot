@@ -50,7 +50,7 @@ Startup, configuration, IRC connection, console loop.
 7. Main loop: monitors `irc_connected`; if disconnected, calls `IrcConnectStart()`
 
 **`ReloadLibrary()`:**
-Calls `dlclose()` on the old handle, then tries `dlopen("./src/.libs/liblunabot.so", ...)` first (libtool in-tree build path), falling back to `dlopen("liblunabot.so", ...)` for installed deployments. Re-resolves all 6 function pointers: `Log`, `FreeRawLine`, `ParseRawLine`, `SendIrcMessage`, `ReplayJsonPayload`, `liblunabotInit`. Also links the main program's `globals` struct into the library via the exported `libglobals` pointer.
+Calls `dlclose()` on the old handle, then tries `dlopen("./src/lib/.libs/liblunabot.so", ...)` first (libtool in-tree build path), falling back to `dlopen("liblunabot.so", ...)` for installed deployments. Re-resolves all 6 function pointers: `Log`, `FreeRawLine`, `ParseRawLine`, `SendIrcMessage`, `ReplayJsonPayload`, `liblunabotInit`. Also links the main program's `globals` struct into the library via the exported `libglobals` pointer.
 
 **`IrcConnect()` (thread):**
 - Creates a TCP socket, resolves the IRC server hostname via `getaddrinfo()`

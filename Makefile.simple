@@ -16,8 +16,8 @@ all: prepare $(LIBNAME) $(PROGNAME)
 prepare:
 	@[ -d "$(OBJDIR)" ] || mkdir -v "$(OBJDIR)"
 
-$(LIBNAME): src/liblunabot.c
-	gcc -shared -fPIC $(CFLAGS) src/liblunabot.c -o $(LIBNAME) $(LDFLAGS)
+$(LIBNAME): src/lib/liblunabot.c
+	gcc -shared -fPIC $(CFLAGS) src/lib/liblunabot.c -o $(LIBNAME) $(LDFLAGS)
 
 $(OBJDIR)/lunabot.o: src/lunabot.c
 	gcc -c $(CFLAGS) src/lunabot.c -o $(OBJDIR)/lunabot.o

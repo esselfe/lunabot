@@ -22,9 +22,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy lunabot binary and library (dlopen expects ./src/.libs/liblunabot.so)
+# Copy lunabot binary and library (dlopen expects ./src/lib/.libs/liblunabot.so)
 COPY --from=builder /build/src/lunabot /app/lunabot
-COPY --from=builder /build/src/.libs/liblunabot.so /app/src/.libs/liblunabot.so
+COPY --from=builder /build/src/lib/.libs/liblunabot.so /app/src/lib/.libs/liblunabot.so
 
 # Copy observer binary
 COPY --from=builder /build/test/observer/observer /app/observer
