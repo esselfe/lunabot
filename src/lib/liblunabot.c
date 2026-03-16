@@ -121,16 +121,6 @@ char *SanitizeMessage(json_t *root, json_t *msg) {
 	return msg_text;
 }
 
-static const char *StripGithubApiPrefix(const char *url) {
-	const char *prefix = "https://api.github.com/repos/";
-	unsigned int prefix_len = strlen(prefix);
-
-	if (strncmp(url, prefix, prefix_len) == 0)
-		return url + prefix_len;
-
-	return url;
-}
-
 struct CurlBuffer {
 	char *data;
 	size_t size;
