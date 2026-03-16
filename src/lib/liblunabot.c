@@ -374,7 +374,7 @@ void ParseJsonData(char *json_data) {
 		}
 		snprintf(msg_text_limited, 128, "%s", msg_text);
 
-		char *color;
+		char *color = YELLOW;
 		char *status_str = strdup(json_string_value(status));
 		if (strcmp(status_str, "pending") == 0) {
 			// Reduce message volume and skip those
@@ -688,10 +688,10 @@ void ParseJsonData(char *json_data) {
 	// Process push commits
 	json_t *ref = json_object_get(root, "refs");
 	json_t *commits = json_object_get(root, "commits");
-	json_t *committer;
-	json_t *username;
-	json_t *msg;
-	json_t *url;
+	json_t *committer = NULL;
+	json_t *username = NULL;
+	json_t *msg = NULL;
+	json_t *url = NULL;
 	if (ref != NULL && commits != NULL) {
 		if (libglobals->ignore_commits) {
 			json_decref(root);
@@ -715,7 +715,7 @@ void ParseJsonData(char *json_data) {
 			msg = json_object_get(arrobj, "message");
 			url = json_object_get(arrobj, "url");
 			
-			if (json_is_string(username) && json_is_string(msg) &&
+			if (username != NULL && json_is_string(username) && json_is_string(msg) &&
 			  json_is_string(url)) {
 				char *msg_text = SanitizeMessage(root, msg);
 
