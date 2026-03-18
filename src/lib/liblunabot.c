@@ -16,15 +16,6 @@
 
 struct GlobalVariables *libglobals;
 
-// Function to send messages to the IRC channel
-void SendIrcMessage(const char *message) {
-	Log(OUT, (char *)message);
-	char buffer_msg[BUFFER_SIZE * 16];
-	snprintf(buffer_msg, sizeof(buffer_msg), "PRIVMSG %s :%s\r\n",
-		libglobals->channel, message);
-	SSL_write(libglobals->pSSL, buffer_msg, strlen(buffer_msg));
-}
-
 // Function to verify the GitHub webhook signature
 int VerifySignature_func(const char *payload, const char *signature) {
 	if (libglobals->debug)
