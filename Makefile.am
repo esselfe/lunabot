@@ -4,7 +4,10 @@ SUBDIRS = src src/lib
 
 EXTRA_DIST = lunabot.conf.json Makefile.simple README.md LICENSE CLAUDE.md
 
-.PHONY: test test-clean
+.PHONY: all-local test test-clean
+
+all-local:
+	$(LN_S) src/lunabot lunabot || cp src/lunabot lunabot
 
 test: all
 	@echo "Running integration tests..."
