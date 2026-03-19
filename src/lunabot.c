@@ -1,5 +1,7 @@
 /* IRC bot for Github webhook notifications
-   Copyrighted Stephane Fontaine 2025 under GPLv3
+   Copyrighted 2025-2026 GPLv3 (see the LICENSE file joined to this source code)
+   Original author: Stephane Fontaine (esselfe)
+   Contributor:     Stefan Wold (Ratler)
 */
 #include <stdio.h>
 #include <stdlib.h>
