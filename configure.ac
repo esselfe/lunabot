@@ -5,6 +5,8 @@ AC_PROG_CC
 AM_PROG_AR
 LT_INIT([dlopen disable-static])
 
+CFLAGS="-g -O0"
+
 PKG_CHECK_MODULES([MICROHTTPD], [libmicrohttpd])
 PKG_CHECK_MODULES([JANSSON], [jansson])
 PKG_CHECK_MODULES([OPENSSL], [openssl >= 1.1.0])
