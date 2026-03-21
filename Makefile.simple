@@ -17,10 +17,10 @@ prepare:
 	@[ -d "$(OBJDIR)" ] || mkdir -v "$(OBJDIR)"
 
 $(LIBNAME): src/lib/liblunabot.c
-	gcc -shared -fPIC $(CFLAGS) src/lib/liblunabot.c -o $(LIBNAME) $(LDFLAGS)
+	gcc -shared -fPIC $(CFLAGS) -I../ src/lib/*.c -o $(LIBNAME) $(LDFLAGS)
 
 $(OBJDIR)/lunabot.o: src/lunabot.c
-	gcc -c $(CFLAGS) src/lunabot.c -o $(OBJDIR)/lunabot.o
+	gcc -c $(CFLAGS) -Isrc/lib -Isrc src/lunabot.c -o $(OBJDIR)/lunabot.o
 
 $(PROGNAME): $(OBJS)
 	gcc $(OBJS) -o $(PROGNAME) $(LDFLAGS)
