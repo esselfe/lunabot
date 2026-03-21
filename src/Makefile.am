@@ -6,4 +6,7 @@ lunabot_LDADD = $(JANSSON_LIBS) $(OPENSSL_LIBS) $(PTHREAD_LIBS)
 
 dist_doc_DATA = $(top_srcdir)/lunabot.conf.json $(top_srcdir)/README.md
 
+clean-local:
+	rm -rf .deps
+
 MAINTAINERCLEANFILES = Makefile.in

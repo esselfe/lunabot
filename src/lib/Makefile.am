@@ -9,4 +9,7 @@ liblunabot_la_LIBADD = $(MICROHTTPD_LIBS) $(JANSSON_LIBS) $(OPENSSL_LIBS) $(CURL
 install-exec-hook:
 	rm -f $(DESTDIR)$(libdir)/liblunabot.la
 
+clean-local:
+	rm -rf .deps
+
 MAINTAINERCLEANFILES = Makefile.in
