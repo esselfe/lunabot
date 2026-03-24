@@ -1,4 +1,4 @@
-AC_INIT([lunabot], [0.6.0], [], [lunabot])
+AC_INIT([lunabot], [0.6.1], [], [lunabot])
 AM_INIT_AUTOMAKE([foreign subdir-objects -Wall -Werror])
 AC_CONFIG_MACRO_DIRS([m4])
 AC_PROG_CC
