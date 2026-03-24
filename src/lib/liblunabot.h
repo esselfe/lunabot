@@ -7,6 +7,18 @@
 
 extern struct GlobalVariables *libglobals;
 
+// From src/lib/api.c
+
+struct CurlBuffer {
+	char *data;
+	size_t size;
+};
+
+json_t *FetchGithubApi(const char *url);
+char *FetchPullRequestTitle(const char *repo_full_name, int pr_number);
+int FetchPullRequestBySha(const char *repo_full_name,
+	const char *head_sha, int *out_number, char **out_title);
+
 // From src/lib/irc.c
 void SendIrcMessage(const char *message);
 
