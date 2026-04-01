@@ -33,7 +33,7 @@ int VerifySignature_func(const char *payload, const char *signature) {
 		else {
 			fgets(secret, BUFFER_SIZE - 1, fp);
 			fclose(fp);
-
+		
 			// Strip newline ending
 			if (secret[strlen(secret)-1] == '\n')
 				secret[strlen(secret)-1] = '\0';

@@ -22,6 +22,10 @@ int FetchPullRequestBySha(const char *repo_full_name,
 // From src/lib/irc.c
 void SendIrcMessage(const char *message);
 
+// From src/lib/json.c
+void ParseJsonData(char *json_data);
+void ReplayJsonPayload(char *filename);
+
 // From src/lib/log.c
 void Log(unsigned int direction, char *text);
 

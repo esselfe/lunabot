@@ -1,6 +1,6 @@
 lib_LTLIBRARIES = liblunabot.la
 
-liblunabot_la_SOURCES = liblunabot.c api.c irc.c log.c sanitize.c \
+liblunabot_la_SOURCES = liblunabot.c api.c irc.c json.c log.c sanitize.c \
   verify-signature.c ../lunabot.h
 liblunabot_la_CFLAGS = -std=c17 -Wall -Wno-unused-but-set-variable -O0 \
   -I.. $(MICROHTTPD_CFLAGS) $(JANSSON_CFLAGS) $(OPENSSL_CFLAGS) \
