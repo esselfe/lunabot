@@ -72,13 +72,4 @@ struct GlobalVariables {
 };
 extern struct GlobalVariables globals;
 
-struct RawLine {
-	char *nick;
-	char *username;
-	char *host;
-	char *command;
-	char *channel;
-	char *text;
-};
-
 #endif /* LUNABOT_H */

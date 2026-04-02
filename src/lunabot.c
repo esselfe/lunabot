@@ -55,8 +55,6 @@ printf("lunabot option usage: lunabot --help/-h | --version/-V | --debug/-d |\n"
 
 void *handle;
 void (*Log_fp)(unsigned int direction, char *text);
-struct RawLine *(*ParseRawLine_fp)(char *line);
-void (*FreeRawLine_fp)(struct RawLine *rawp);
 void (*SendIrcMessage_fp)(const char *message);
 void (*ReplayJsonPayload_fp)(char *filename);
 void (*liblunabotInit_fp)(void);
@@ -110,24 +108,6 @@ void ReloadLibrary(void) {
 	if (Log_fp == NULL) {
 		fprintf(stderr,
 			"lunabot::ReloadLibrary() error: Cannot load Log(): %s\n",
-			dlerror());
-		dlclose(handle);
-		exit(1);
-	}
-	
-	*(void **)(&FreeRawLine_fp) = dlsym(handle, "FreeRawLine");
-	if (FreeRawLine_fp == NULL) {
-		fprintf(stderr,
-			"lunabot::ReloadLibrary() error: Cannot load FreeRawLine(): %s\n",
-			dlerror());
-		dlclose(handle);
-		exit(1);
-	}
-	
-	*(void **)(&ParseRawLine_fp) = dlsym(handle, "ParseRawLine");
-	if (ParseRawLine_fp == NULL) {
-		fprintf(stderr,
-			"lunabot::ReloadLibrary() error: Cannot load ParseRawLine(): %s\n",
 			dlerror());
 		dlclose(handle);
 		exit(1);
