@@ -38,4 +38,11 @@ char *SanitizeMessage(json_t *root, json_t *msg);
 
 // From src/lib/verify-signature.c
 int VerifySignature_func(const char *payload, const char *signature);
+
+// From src/lib/webhook.c
+enum MHD_Result WebhookCallback(void *cls, struct MHD_Connection *connection,
+		const char *url, const char *method,
+		const char *version, const char *upload_data,
+		unsigned long *upload_data_size, void **ptr);
+
 #endif /* LIBLUNABOT_H */
