@@ -1,6 +1,7 @@
 #ifndef LIBLUNABOT_H
 #define LIBLUNABOT_H 1
 
+#include <microhttpd.h>
 #include <jansson.h>
 
 #include "lunabot.h"
@@ -18,6 +19,9 @@ json_t *FetchGithubApi(const char *url);
 char *FetchPullRequestTitle(const char *repo_full_name, int pr_number);
 int FetchPullRequestBySha(const char *repo_full_name,
 	const char *head_sha, int *out_number, char **out_title);
+
+// From src/lib/health-check.c
+enum MHD_Result HandleHealthCheck(struct MHD_Connection *connection);
 
 // From src/lib/irc.c
 void SendIrcMessage(const char *message);
