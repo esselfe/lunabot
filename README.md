@@ -34,7 +34,7 @@ The library can be reloaded at runtime without restarting the bot (type `reload`
 
 To compile and run lunabot, you will need the following dependencies installed:
 
-- autoconf, autoconf-archive, automake, libtool and m4 (to generate the build system)
+- autoconf, automake, libtool (to generate the build system)
 - gcc (The GNU C compiler)
 - libmicrohttpd (for the webhook server)
 - jansson (for the webhook JSON data parsing)
@@ -49,7 +49,7 @@ Run `autogen.sh` once to generate the build system, then configure and build:
 ```sh
 ./autogen.sh       # generate configure script (requires autoconf, automake, libtool)
 ./configure        # detect dependencies via pkg-config
-make               # builds src/.libs/liblunabot.so and lunabot
+make               # builds src/lib/.libs/liblunabot.so and lunabot
 ```
 
 You will need to provide credentials at runtime. Either set environment variables:

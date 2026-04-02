@@ -32,7 +32,6 @@ The split is intentional: the library can be reloaded at runtime without restart
 Defines shared data structures and constants:
 - `struct IrcConfig` — IRC-specific fields: `irc_server_hostname`, `irc_server_ip`, `irc_server_port`, `irc_sock`. Embedded as `irc` inside `GlobalVariables`.
 - `struct GlobalVariables` — single global state struct holding all runtime config (IRC connection via `irc`, SSL pointer, webhook port, flags, etc.)
-- `struct RawLine` — parsed IRC message fields (nick, username, host, command, channel, text)
 - IRC color code defines (`GREEN`, `RED`, `CYAN`, etc.) using mIRC color format (`\003NN`)
 - Log direction constants: `LOCAL` (internal), `IN` (received), `OUT` (sent)
 - `DEFAULT_CONTEXT_NAME` defaults to `"default"`
@@ -50,7 +49,7 @@ Startup, configuration, IRC connection, console loop.
 7. Main loop: monitors `irc_connected`; if disconnected, calls `IrcConnectStart()`
 
 **`ReloadLibrary()`:**
-Calls `dlclose()` on the old handle, then tries `dlopen("./src/lib/.libs/liblunabot.so", ...)` first (libtool in-tree build path), falling back to `dlopen("liblunabot.so", ...)` for installed deployments. Re-resolves all 6 function pointers: `Log`, `FreeRawLine`, `ParseRawLine`, `SendIrcMessage`, `ReplayJsonPayload`, `liblunabotInit`. Also links the main program's `globals` struct into the library via the exported `libglobals` pointer.
+Calls `dlclose()` on the old handle, then tries `dlopen("./src/lib/.libs/liblunabot.so", ...)` first (libtool in-tree build path), falling back to `dlopen("liblunabot.so", ...)` for installed deployments. Re-resolves all 4 function pointers: `Log`, `SendIrcMessage`, `ReplayJsonPayload`, `liblunabotInit`. Also links the main program's `globals` struct into the library via the exported `libglobals` pointer.
 
 **`IrcConnect()` (thread):**
 - Creates a TCP socket, resolves the IRC server hostname via `getaddrinfo()`
@@ -75,33 +74,61 @@ Reads stdin line by line:
 
 ---
 
-### `src/liblunabot.c` — Shared Library
-All webhook processing, IRC message sending, health checks, GitHub API calls, and IRC line parsing.
+### `src/lib/` — Shared Library Sources
 
-**`libglobals`:** A pointer to the main program's `globals` struct, set by `ReloadLibrary()` on each load.
+The shared library (`liblunabot.so`) is compiled from multiple source files in `src/lib/`. The entry point file is `src/lib/liblunabot.c`; all other modules are linked into the same `.so`.
+
+**`libglobals`** (declared in `liblunabot.c`): A pointer to the main program's `globals` struct, set by `ReloadLibrary()` on each load. All library modules access runtime state through this pointer.
+
+---
+
+**`src/lib/liblunabot.c`** — Library entry point.
+
+**`liblunabotInit()`:**
+Stops any running MHD daemon, starts a new one on `webhook_port`. Called at startup and on `reload`. Initializes `health_check_tprev` so the first health check is immediately available.
+
+---
+
+**`src/lib/log.c`**
 
 **`Log(direction, text)`:**
 Writes a timestamped line to stdout (with ANSI cyan color) and to `lunabot.log` (or configured log file). Format: `YYYYMMDD-HH:MM:SS.usec <<##text##`. Direction symbols: `||` local, `<<` in, `>>` out.
 
+---
+
+**`src/lib/irc.c`**
+
 **`SendIrcMessage(message)`:**
 Formats `PRIVMSG #channel :message\r\n` and writes to SSL socket. Also calls `Log(OUT, ...)`.
+
+---
+
+**`src/lib/verify-signature.c`**
 
 **`VerifySignature_func(payload, signature)`:**
 Computes HMAC-SHA256 of the payload using the webhook secret (from `LUNABOT_WEBHOOK_SECRET` env var or `.secret` file). Compares against the GitHub-provided `X-Hub-Signature-256` header. Uses a constant-time comparison loop to mitigate timing attacks. Returns 0 on success, 1 on failure.
 
+---
+
+**`src/lib/sanitize.c`**
+
 **`SanitizeMessage(root, msg)`:**
-Extracts a JSON string value and replaces control characters (`\n`, `\r`, `\a`, `\033`) with spaces to prevent IRC injection.
+Extracts a JSON string value and replaces control characters (`\n`, `\r`, `\a`, `\033`) and shell-sensitive characters with spaces to prevent IRC injection.
 
-**`StripGithubApiPrefix(url)`:**
-Strips `https://api.github.com/repos/` prefix from URLs, leaving the `owner/repo/...` path for constructing `https://github.com/` URLs.
+---
 
-**GitHub API helpers (libcurl-based):**
+**`src/lib/api.c`** — GitHub API helpers (libcurl-based).
+
 - `CurlWriteCallback()` / `struct CurlBuffer` — accumulates HTTP response data for libcurl.
 - `FetchGithubApi(url)` — performs a GET request to the GitHub API, returns parsed jansson JSON. Caller must `json_decref()` the result.
 - `FetchPullRequestTitle(repo_full_name, pr_number)` — fetches PR title from `GET /repos/{owner}/{repo}/pulls/{number}`.
 - `FetchPullRequestBySha(repo_full_name, head_sha, &out_number, &out_title)` — looks up a PR by commit SHA. Tries `GET /repos/{owner}/{repo}/commits/{sha}/pulls` first; falls back to the search API (`GET /search/issues?q=repo:...+type:pr+SHA:...`) for fork PRs where the commits endpoint returns an empty array. Sets `out_number` and `out_title` (caller must free). Returns 0 on success.
 
-**`ShouldSkipLabelEvent(root)`:**
+---
+
+**`src/lib/json.c`** — Webhook event dispatcher.
+
+**`ShouldSkipLabelEvent(root)`** (static):
 Helper that returns 1 (skip) if `ignore_labels` is set, or if `only_core_labels` is set and the event's `repository.name` is not `moonbase-core`. Returns 0 to process.
 
 **`ParseJsonData(json_data)`:**
@@ -135,20 +162,21 @@ Falls through to a "Got webhook data without a conditional branch" log message i
 **`ReplayJsonPayload(filename)`:**
 Reads a JSON file from disk and feeds it directly to `ParseJsonData()`. Used for testing without a live GitHub webhook.
 
+---
+
+**`src/lib/health-check.c`**
+
+**`HandleHealthCheck(connection)`:**
+Rate-limited health check handler. Sends `PING NickServ` over IRC, waits up to 10 seconds for a `PONG` response (detected via `health_check` flag in `globals`). Returns 200 if pong received, 500 on timeout. Returns 200 immediately (rate-limited) if called too frequently. The timeout is implemented via a detached `HealthCheckTimeoutFunc` thread.
+
+---
+
+**`src/lib/webhook.c`**
+
 **`WebhookCallback()`** (libmicrohttpd request handler):
-- **GET `/health`**: Rate-limited health check. Sends `PING NickServ` over IRC, waits up to 10 seconds for a `PONG` response (detected in `ParseRawLine`). Returns 200 if pong received, 500 on timeout. Returns 200 immediately (rate-limited) if called too frequently.
+- **GET `/health`**: Delegates to `HandleHealthCheck()`.
 - **POST (all other paths)**: Validates `X-Hub-Signature-256` header presence, accumulates chunked POST body into a dynamically growing buffer, then calls `VerifySignature_func()` and `ParseJsonData()` once the full body is received.
 - Non-POST, non-GET requests return 401.
-
-**`ParseRawLine(line)`:**
-Parses IRC protocol lines in the format `:nick!~user@host COMMAND #channel :text`.
-- Skips NickServ/ChanServ messages, PING, ERROR, numeric server replies, MODE, NOTICE
-- Detects `PONG` replies and sets `health_check = 2` (signals the health check poller)
-- Returns a heap-allocated `struct RawLine` (caller must free with `FreeRawLine()`)
-- Note: `ParseRawLine` is defined in the library but currently not called in the IRC read loop in `lunabot.c`
-
-**`liblunabotInit()`:**
-Stops any running MHD daemon, starts a new one on `webhook_port`. Called at startup and on `reload`. Initializes `health_check_tprev` so the first health check is immediately available.
 
 ---
 
@@ -186,14 +214,14 @@ The project uses autotools. Run `autogen.sh` once to generate the build system, 
 ```sh
 ./autogen.sh       # generate configure script (requires autoconf, automake, libtool)
 ./configure        # detect dependencies via pkg-config
-make               # builds src/.libs/liblunabot.so and lunabot
+make               # builds src/lib/.libs/liblunabot.so and lunabot
 make clean         # remove build artifacts
 make maintainer-clean  # remove all autotools-generated files too
 ```
 
 The old hand-written Makefile is preserved as `Makefile.simple` for reference.
 
-The library is built into `src/.libs/liblunabot.so` by libtool during in-tree builds. `ReloadLibrary()` tries that path first, then falls back to the bare name for installed deployments.
+The library is built into `src/lib/.libs/liblunabot.so` by libtool during in-tree builds. `ReloadLibrary()` tries that path first, then falls back to the bare name for installed deployments.
 
 The binary links against: `-lpthread -lmicrohttpd -ljansson -lssl -lcrypto -lcurl -ldl`
 
