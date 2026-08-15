@@ -5,6 +5,8 @@ Lunabot is a C IRC bot (GPLv3) that relays GitHub webhook events to an IRC chann
 ## Features
 
 - Connects to an IRC server over TLS with OpenSSL.
+- Authenticates during connection with IRCv3 SASL PLAIN and joins only after
+  authentication succeeds.
 - Sends messages in the channel for:
   - New pull request.
   - Pending CI build (optional).
@@ -52,12 +54,20 @@ Run `autogen.sh` once to generate the build system, then configure and build:
 make               # builds src/lib/.libs/liblunabot.so and lunabot
 ```
 
-You will need to provide credentials at runtime. Either set environment variables:
+You will need to provide credentials at runtime. Set environment variables:
 
-- `LUNABOT_NICKSERV_PASSWORD` — IRC NickServ password
+- `LUNABOT_SASL_USERNAME` — IRC account name (defaults to the configured nick)
+- `LUNABOT_SASL_PASSWORD` — IRC account password
 - `LUNABOT_WEBHOOK_SECRET` — GitHub webhook secret
 
-Or place them in `.passwd` and `.secret` files respectively.
+Or place the SASL password and webhook secret in `.passwd` and `.secret` files
+respectively. `LUNABOT_NICKSERV_PASSWORD` remains accepted as a backwards-
+compatible alias for `LUNABOT_SASL_PASSWORD`.
+
+SASL is mandatory. If the server does not advertise SASL or authentication
+fails, lunabot disconnects without joining the channel and retries later. See
+[`docs/libera-sasl.md`](docs/libera-sasl.md) for Libera.Chat, Irssi, and Docker
+setup instructions.
 
 To run the program, type `./lunabot`.
 

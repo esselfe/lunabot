@@ -163,10 +163,34 @@ if [[ "$WAIT_COUNT" -ge 60 ]]; then
     exit 1
 fi
 
-# Wait for lunabot to connect to IRC and the observer to join
-# The webhook is up, but IRC connection happens in a thread; give it time
-echo "Waiting for IRC connections to establish..."
-sleep 5
+# Wait for SASL to finish and verify that JOIN was sent only afterwards.
+echo "Waiting for SASL authentication and IRC join..."
+WAIT_COUNT=0
+while [[ "$WAIT_COUNT" -lt 30 ]]; do
+    LUNABOT_LOG=$(docker compose -f "$COMPOSE_FILE" logs --no-log-prefix lunabot 2>/dev/null || true)
+    if grep -qF "SASL authentication successful" <<< "$LUNABOT_LOG" &&
+       grep -qF "JOIN #test-lunabot" <<< "$LUNABOT_LOG"; then
+        break
+    fi
+    sleep 1
+    WAIT_COUNT=$((WAIT_COUNT + 1))
+done
+
+if [[ "$WAIT_COUNT" -ge 30 ]]; then
+    echo "ERROR: Lunabot did not authenticate with SASL and join within 30 seconds." >&2
+    docker compose -f "$COMPOSE_FILE" logs lunabot 2>/dev/null || true
+    exit 1
+fi
+
+SASL_LINE=$(grep -nF "SASL authentication successful" <<< "$LUNABOT_LOG" | head -1 | cut -d: -f1)
+JOIN_LINE=$(grep -nF "JOIN #test-lunabot" <<< "$LUNABOT_LOG" | head -1 | cut -d: -f1)
+if [[ "$SASL_LINE" -lt "$JOIN_LINE" ]]; then
+    echo "  PASS: SASL authentication completes before channel join"
+    PASS_COUNT=$((PASS_COUNT + 1))
+else
+    echo "  FAIL: Channel join was not gated on successful SASL authentication"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
 
 echo ""
 echo "=== Running Tests ==="
