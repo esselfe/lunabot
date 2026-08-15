@@ -4,7 +4,7 @@
 
 Lunabot is a C IRC bot (GPLv3, author: Stephane Fontaine) that relays GitHub webhook events to an IRC channel over TLS. It was written for the Lunar-Linux project but is configurable for any GitHub project.
 
-**Version:** 0.5.6
+**Version:** 0.6.3
 **Language:** C (C17 standard)
 **Build system:** Autotools (autoconf/automake/libtool)
 **Dependencies:** gcc, libmicrohttpd, jansson, openssl, libcurl, pthread
@@ -53,11 +53,15 @@ Calls `dlclose()` on the old handle, then tries `dlopen("./src/lib/.libs/libluna
 
 **`IrcConnect()` (thread):**
 - Creates a TCP socket, resolves the IRC server hostname via `getaddrinfo()`
-- Connects, sets up OpenSSL TLS (minimum TLS 1.2, no compression)
-- Sends `NICK`, `USER`, then `PRIVMSG NickServ :IDENTIFY <password>`
-  - Password read from `LUNABOT_NICKSERV_PASSWORD` env var, or `.passwd` file
-- Joins the configured channel
-- Enters a read loop: handles `PING` → `PONG` internally; logs everything else via `Log_fp()`
+- Connects, sets up verified OpenSSL TLS (minimum TLS 1.2, no compression)
+- Negotiates IRCv3 capabilities and authenticates with SASL PLAIN
+  - Account read from `LUNABOT_SASL_USERNAME`, defaulting to the configured nick
+  - Password read from `LUNABOT_SASL_PASSWORD`, the legacy
+    `LUNABOT_NICKSERV_PASSWORD`, or `.passwd`
+- Sends `CAP END` only after numeric 903, then joins the configured channel only
+  after the server completes registration with numeric 001
+- Enters a line-buffered read loop: handles `PING` → `PONG` internally; logs
+  everything else via `Log_fp()`
 - On disconnect, sets `globals.irc_connected = 0` (main loop will reconnect)
 - IRC fields accessed via `globals.irc.*` (the nested `struct IrcConfig`)
 
@@ -202,7 +206,9 @@ Rate-limited health check handler. Sends `PING NickServ` over IRC, waits up to 1
 **CLI flags** override config values: `--debug/-d`, `--channel/-c`, `--nick/-n`, `--irc-port/-p`, `--irc-server/-s`, `--webhook-port/-w`, `--log/-l`, `--context/-C`.
 
 **Credentials** (required at runtime):
-- NickServ password: `LUNABOT_NICKSERV_PASSWORD` env var or `.passwd` file
+- SASL account: `LUNABOT_SASL_USERNAME` env var (defaults to the configured nick)
+- SASL password: `LUNABOT_SASL_PASSWORD`, legacy
+  `LUNABOT_NICKSERV_PASSWORD`, or `.passwd`
 - Webhook secret: `LUNABOT_WEBHOOK_SECRET` env var or `.secret` file
 
 ---

@@ -17,13 +17,28 @@ services:
       dockerfile: test/Dockerfile.lunabot
     command: stdbuf -oL ./lunabot --irc-server ergo --irc-port 6697 --webhook-port 3000 --channel "#test-lunabot" --nick lunabot
     depends_on:
-      ergo:
-        condition: service_healthy
+      registrar:
+        condition: service_completed_successfully
     ports:
       - "3000:3000"
     environment:
-      - LUNABOT_NICKSERV_PASSWORD=test-password
+      - LUNABOT_SASL_USERNAME=lunabot
+      - LUNABOT_SASL_PASSWORD=test-password
       - LUNABOT_WEBHOOK_SECRET=test-webhook-secret
+    networks:
+      - testnet
+
+  registrar:
+    build:
+      context: ..
+      dockerfile: test/Dockerfile.lunabot
+    command: >-
+      /bin/sh -c "(printf 'NICK lunabot\r\nUSER lunabot 0 * :test registrar\r\n';
+      sleep 1; printf 'PRIVMSG NickServ :REGISTER test-password\r\n'; sleep 2) |
+      nc -q 1 ergo 6667"
+    depends_on:
+      ergo:
+        condition: service_healthy
     networks:
       - testnet
 

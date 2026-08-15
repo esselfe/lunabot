@@ -2,6 +2,7 @@
 #define LUNABOT_H 1
 
 #include <time.h>
+#include <pthread.h>
 #include <openssl/ssl.h>
 #include <microhttpd.h>
 
@@ -52,12 +53,14 @@ struct GlobalVariables {
 	unsigned int debug;
 	unsigned int mainloopend;
 	int irc_connected;
+	int irc_ready;
 	struct IrcConfig irc;
 	unsigned int webhook_port;
 	char *nick;
 	char *channel;
 	char *context_name;
 	SSL *pSSL;
+	pthread_mutex_t irc_write_mutex;
 	struct MHD_Daemon *httpdaemon;
 	unsigned int only_core_labels; // Specific to Lunar-Linux
 	unsigned int ignore_labels;

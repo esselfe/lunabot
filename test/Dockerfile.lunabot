@@ -18,6 +18,7 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libmicrohttpd12 libjansson4 libssl3 libcurl4 openssl ca-certificates \
+    netcat-openbsd \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -45,9 +45,17 @@ enum MHD_Result HandleHealthCheck(struct MHD_Connection *connection) {
 		libglobals->health_check = 1;
 		char buffer2[BUFFER_SIZE];
 		sprintf(buffer2, "PING NickServ\r\n");
-		SSL_write(libglobals->pSSL, buffer2, strlen(buffer2));
+		pthread_mutex_lock(&libglobals->irc_write_mutex);
+		if (libglobals->pSSL == NULL || !libglobals->irc_ready) {
+			pthread_mutex_unlock(&libglobals->irc_write_mutex);
+			libglobals->health_check = -1;
+		} else {
+			SSL_write(libglobals->pSSL, buffer2, strlen(buffer2));
+			pthread_mutex_unlock(&libglobals->irc_write_mutex);
+		}
 
-		HealthCheckTimeoutStart();
+		if (libglobals->health_check == 1)
+			HealthCheckTimeoutStart();
 
 		while (libglobals->health_check == 1)
 			sleep(1);
@@ -77,4 +85,3 @@ enum MHD_Result HandleHealthCheck(struct MHD_Connection *connection) {
 	MHD_destroy_response(response200);
 	return ret;
 }
-

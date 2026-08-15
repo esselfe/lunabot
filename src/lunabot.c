@@ -16,6 +16,8 @@
 #include <arpa/inet.h>
 #include <openssl/hmac.h>
 #include <openssl/evp.h>
+#include <openssl/err.h>
+#include <openssl/crypto.h>
 #include <openssl/ssl.h>
 #include <pthread.h>
 #include <getopt.h>
@@ -25,7 +27,7 @@
 #include "lunabot.h"
 #include "liblunabot.h"
 
-const char *lunabot_version_string = "0.6.2";
+const char *lunabot_version_string = "0.6.3";
 
 struct GlobalVariables globals, **globals_ptr;
 char buffer[BUFFER_SIZE];
@@ -167,9 +169,305 @@ char *GetIP(char *hostname) {
 
 }
 
+enum SaslState {
+	SASL_WAIT_CAP_LS,
+	SASL_WAIT_CAP_ACK,
+	SASL_WAIT_AUTHENTICATE,
+	SASL_WAIT_RESULT,
+	SASL_AUTHENTICATED,
+	SASL_COMPLETE,
+	SASL_FAILED
+};
+
+struct SaslContext {
+	enum SaslState state;
+	int sasl_available;
+	char *response;
+	size_t response_len;
+};
+
+static int IrcWrite(const char *message) {
+	int ret = -1;
+
+	pthread_mutex_lock(&globals.irc_write_mutex);
+	if (globals.pSSL != NULL)
+		ret = SSL_write(globals.pSSL, message, (int)strlen(message));
+	pthread_mutex_unlock(&globals.irc_write_mutex);
+
+	return ret;
+}
+
+static int ReadSaslPassword(char *password, size_t password_size) {
+	const char *env_pass = getenv("LUNABOT_SASL_PASSWORD");
+	if (env_pass == NULL || *env_pass == '\0')
+		env_pass = getenv("LUNABOT_NICKSERV_PASSWORD");
+
+	if (env_pass != NULL && *env_pass != '\0') {
+		if (strlen(env_pass) >= password_size) {
+			Log_fp(LOCAL, "lunabot::ReadSaslPassword() error: SASL password is too long");
+			return -1;
+		}
+		strcpy(password, env_pass);
+		return 0;
+	}
+
+	FILE *fp = fopen(".passwd", "r");
+	if (fp == NULL) {
+		snprintf(buffer_log, sizeof(buffer_log),
+			"lunabot::ReadSaslPassword() error: Cannot open .passwd: %s",
+			strerror(errno));
+		Log_fp(LOCAL, buffer_log);
+		return -1;
+	}
+
+	if (fgets(password, (int)password_size, fp) == NULL) {
+		fclose(fp);
+		Log_fp(LOCAL, "lunabot::ReadSaslPassword() error: Cannot read .passwd");
+		return -1;
+	}
+	fclose(fp);
+	password[strcspn(password, "\r\n")] = '\0';
+	if (*password == '\0') {
+		Log_fp(LOCAL, "lunabot::ReadSaslPassword() error: SASL password is empty");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int PrepareSaslResponse(struct SaslContext *sasl) {
+	char password[BUFFER_SIZE];
+	const char *username = getenv("LUNABOT_SASL_USERNAME");
+	if (username == NULL || *username == '\0')
+		username = globals.nick;
+
+	if (username == NULL || *username == '\0') {
+		Log_fp(LOCAL, "lunabot::PrepareSaslResponse() error: SASL username is empty");
+		return -1;
+	}
+	if (ReadSaslPassword(password, sizeof(password)) != 0)
+		return -1;
+
+	size_t username_len = strlen(username);
+	size_t password_len = strlen(password);
+	size_t plain_len = username_len + password_len + 2;
+	unsigned char *plain = malloc(plain_len);
+	if (plain == NULL) {
+		OPENSSL_cleanse(password, sizeof(password));
+		Log_fp(LOCAL, "lunabot::PrepareSaslResponse() error: Out of memory");
+		return -1;
+	}
+
+	plain[0] = '\0';
+	memcpy(plain + 1, username, username_len);
+	plain[username_len + 1] = '\0';
+	memcpy(plain + username_len + 2, password, password_len);
+
+	sasl->response_len = 4 * ((plain_len + 2) / 3);
+	sasl->response = malloc(sasl->response_len + 1);
+	if (sasl->response == NULL) {
+		OPENSSL_cleanse(plain, plain_len);
+		free(plain);
+		OPENSSL_cleanse(password, sizeof(password));
+		Log_fp(LOCAL, "lunabot::PrepareSaslResponse() error: Out of memory");
+		return -1;
+	}
+
+	EVP_EncodeBlock((unsigned char *)sasl->response, plain, (int)plain_len);
+	sasl->response[sasl->response_len] = '\0';
+	OPENSSL_cleanse(plain, plain_len);
+	free(plain);
+	OPENSSL_cleanse(password, sizeof(password));
+	return 0;
+}
+
+static void FreeSaslResponse(struct SaslContext *sasl) {
+	if (sasl->response != NULL) {
+		OPENSSL_cleanse(sasl->response, sasl->response_len);
+		free(sasl->response);
+		sasl->response = NULL;
+		sasl->response_len = 0;
+	}
+}
+
+static int SendSaslResponse(const struct SaslContext *sasl) {
+	char message[430];
+	size_t offset = 0;
+
+	while (offset < sasl->response_len) {
+		size_t chunk_len = sasl->response_len - offset;
+		if (chunk_len > 400)
+			chunk_len = 400;
+		snprintf(message, sizeof(message), "AUTHENTICATE %.*s\r\n",
+			(int)chunk_len, sasl->response + offset);
+		Log_fp(OUT, "AUTHENTICATE ********");
+		if (IrcWrite(message) <= 0)
+			return -1;
+		offset += chunk_len;
+	}
+
+	if (sasl->response_len % 400 == 0) {
+		Log_fp(OUT, "AUTHENTICATE +");
+		if (IrcWrite("AUTHENTICATE +\r\n") <= 0)
+			return -1;
+	}
+
+	return 0;
+}
+
+static void GetIrcCommand(const char *line, char *command, size_t command_size) {
+	const char *p = line;
+	if (*p == '@') {
+		p = strchr(p, ' ');
+		if (p == NULL)
+			return;
+		p++;
+	}
+	if (*p == ':') {
+		p = strchr(p, ' ');
+		if (p == NULL)
+			return;
+		p++;
+	}
+
+	size_t len = strcspn(p, " ");
+	if (len >= command_size)
+		len = command_size - 1;
+	memcpy(command, p, len);
+	command[len] = '\0';
+}
+
+static int CapabilityListed(const char *line, const char *capability) {
+	const char *caps = strstr(line, " :");
+	if (caps == NULL)
+		return 0;
+	caps += 2;
+
+	size_t wanted_len = strlen(capability);
+	while (*caps != '\0') {
+		size_t token_len = strcspn(caps, " ");
+		size_t name_len = strcspn(caps, "= ");
+		if (name_len == wanted_len && strncmp(caps, capability, wanted_len) == 0)
+			return 1;
+		caps += token_len;
+		while (*caps == ' ')
+			caps++;
+	}
+	return 0;
+}
+
+static int HandleIrcLine(char *line, struct SaslContext *sasl) {
+	char command[16] = {0};
+	char message[BUFFER_SIZE * 2];
+
+	if (strncmp(line, "PING ", 5) == 0) {
+		snprintf(message, sizeof(message), "PONG %s\r\n", line + 5);
+		return IrcWrite(message) > 0 ? 0 : -1;
+	}
+
+	Log_fp(IN, line);
+	GetIrcCommand(line, command, sizeof(command));
+	if (strcmp(command, "PONG") == 0 && globals.health_check == 1)
+		globals.health_check = 2;
+
+	if (strcmp(command, "CAP") == 0 && strstr(line, " LS ") != NULL &&
+	  sasl->state == SASL_WAIT_CAP_LS) {
+		if (CapabilityListed(line, "sasl"))
+			sasl->sasl_available = 1;
+		if (strstr(line, " LS * :") != NULL)
+			return 0;
+		if (!sasl->sasl_available) {
+			Log_fp(LOCAL, "lunabot::SASL error: IRC server does not advertise SASL");
+			sasl->state = SASL_FAILED;
+			return -1;
+		}
+		Log_fp(OUT, "CAP REQ :sasl");
+		if (IrcWrite("CAP REQ :sasl\r\n") <= 0)
+			return -1;
+		sasl->state = SASL_WAIT_CAP_ACK;
+		return 0;
+	}
+
+	if (strcmp(command, "CAP") == 0 && strstr(line, " ACK ") != NULL &&
+	  sasl->state == SASL_WAIT_CAP_ACK) {
+		if (!CapabilityListed(line, "sasl")) {
+			Log_fp(LOCAL, "lunabot::SASL error: IRC server did not acknowledge SASL");
+			sasl->state = SASL_FAILED;
+			return -1;
+		}
+		Log_fp(OUT, "AUTHENTICATE PLAIN");
+		if (IrcWrite("AUTHENTICATE PLAIN\r\n") <= 0)
+			return -1;
+		sasl->state = SASL_WAIT_AUTHENTICATE;
+		return 0;
+	}
+
+	if (strcmp(command, "CAP") == 0 && strstr(line, " NAK ") != NULL) {
+		Log_fp(LOCAL, "lunabot::SASL error: IRC server rejected the SASL capability");
+		sasl->state = SASL_FAILED;
+		return -1;
+	}
+
+	if (strcmp(command, "AUTHENTICATE") == 0 && strstr(line, " +") != NULL &&
+	  sasl->state == SASL_WAIT_AUTHENTICATE) {
+		if (SendSaslResponse(sasl) != 0)
+			return -1;
+		sasl->state = SASL_WAIT_RESULT;
+		return 0;
+	}
+
+	if (strcmp(command, "903") == 0 && sasl->state == SASL_WAIT_RESULT) {
+		FreeSaslResponse(sasl);
+		Log_fp(LOCAL, "SASL authentication successful");
+		Log_fp(OUT, "CAP END");
+		if (IrcWrite("CAP END\r\n") <= 0)
+			return -1;
+		sasl->state = SASL_AUTHENTICATED;
+		return 0;
+	}
+
+	if ((strcmp(command, "902") == 0 || strcmp(command, "904") == 0 ||
+	  strcmp(command, "905") == 0 || strcmp(command, "906") == 0 ||
+	  strcmp(command, "907") == 0 || strcmp(command, "908") == 0) &&
+	  sasl->state != SASL_COMPLETE) {
+		snprintf(buffer_log, sizeof(buffer_log),
+			"lunabot::SASL error: authentication failed (IRC numeric %s)", command);
+		Log_fp(LOCAL, buffer_log);
+		sasl->state = SASL_FAILED;
+		return -1;
+	}
+
+	if (strcmp(command, "001") == 0) {
+		if (sasl->state != SASL_AUTHENTICATED) {
+			Log_fp(LOCAL, "lunabot::SASL error: IRC registration completed without authentication");
+			sasl->state = SASL_FAILED;
+			return -1;
+		}
+		snprintf(message, sizeof(message), "JOIN %s\r\n", globals.channel);
+		snprintf(buffer_log, sizeof(buffer_log), "JOIN %s", globals.channel);
+		Log_fp(OUT, buffer_log);
+		if (IrcWrite(message) <= 0)
+			return -1;
+		globals.irc_ready = 1;
+		sasl->state = SASL_COMPLETE;
+	}
+
+	return 0;
+}
+
 // IRC connection thread
 void *IrcConnect(void *arg) {
 	struct sockaddr_in server_addr;
+	SSL_CTX *ctx = NULL;
+	struct SaslContext sasl = {SASL_WAIT_CAP_LS, 0, NULL, 0};
+	char read_buffer[BUFFER_SIZE * 2];
+	char line_buffer[BUFFER_SIZE * 4];
+	size_t line_len = 0;
+
+	if (PrepareSaslResponse(&sasl) != 0) {
+		globals.irc_connected = 0;
+		return NULL;
+	}
 
 	// Create socket
 	globals.irc.irc_sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -177,6 +475,7 @@ void *IrcConnect(void *arg) {
 		sprintf(buffer_log, "lunabot::IrcConnect() error: socket() failed: %s",
 			strerror(errno));
 		Log_fp(LOCAL, buffer_log);
+		FreeSaslResponse(&sasl);
 		exit(1);
 	}
 
@@ -189,6 +488,7 @@ void *IrcConnect(void *arg) {
 		Log_fp(LOCAL, buffer_log);
 		close(globals.irc.irc_sock);
 		globals.irc_connected = 0;
+		FreeSaslResponse(&sasl);
 		return NULL;
 	}
 
@@ -204,6 +504,7 @@ void *IrcConnect(void *arg) {
 		Log_fp(LOCAL, buffer_log);
 		close(globals.irc.irc_sock);
 		globals.irc_connected = 0;
+		FreeSaslResponse(&sasl);
 		return NULL;
 	}
 
@@ -213,87 +514,106 @@ void *IrcConnect(void *arg) {
 	OpenSSL_add_all_algorithms();
 
 	const SSL_METHOD *method = TLS_method();
-	SSL_CTX *ctx = SSL_CTX_new(method);
+	ctx = SSL_CTX_new(method);
 	if (!ctx) {
 		Log_fp(LOCAL, "lunabot::IrcConnect() error: Cannot create SSL context");
 		close(globals.irc.irc_sock);
 		globals.irc_connected = 0;
+		FreeSaslResponse(&sasl);
 		return NULL;
 	}
 	SSL_CTX_set_options(ctx, SSL_OP_NO_COMPRESSION);
 	SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+	SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+	if (SSL_CTX_set_default_verify_paths(ctx) != 1) {
+		Log_fp(LOCAL, "lunabot::IrcConnect() error: Cannot load the TLS trust store");
+		SSL_CTX_free(ctx);
+		close(globals.irc.irc_sock);
+		globals.irc_connected = 0;
+		FreeSaslResponse(&sasl);
+		return NULL;
+	}
 
 	globals.pSSL = SSL_new(ctx);
+	if (globals.pSSL == NULL) {
+		Log_fp(LOCAL, "lunabot::IrcConnect() error: Cannot create TLS connection");
+		SSL_CTX_free(ctx);
+		close(globals.irc.irc_sock);
+		globals.irc_connected = 0;
+		FreeSaslResponse(&sasl);
+		return NULL;
+	}
 	SSL_set_options(globals.pSSL, SSL_OP_NO_COMPRESSION);
-
-	BIO *bio = BIO_new_socket(globals.irc.irc_sock, BIO_CLOSE);
-	SSL_set_bio(globals.pSSL, bio, bio);
+	SSL_set_fd(globals.pSSL, globals.irc.irc_sock);
+	SSL_set_tlsext_host_name(globals.pSSL, globals.irc.irc_server_hostname);
 	SSL_set1_host(globals.pSSL, globals.irc.irc_server_hostname);
-	SSL_connect(globals.pSSL);
+	if (SSL_connect(globals.pSSL) != 1) {
+		unsigned long ssl_error = ERR_get_error();
+		snprintf(buffer_log, sizeof(buffer_log),
+			"lunabot::IrcConnect() error: TLS handshake failed: %s",
+			ssl_error ? ERR_error_string(ssl_error, NULL) : "unknown TLS error");
+		Log_fp(LOCAL, buffer_log);
+		SSL_free(globals.pSSL);
+		globals.pSSL = NULL;
+		SSL_CTX_free(ctx);
+		close(globals.irc.irc_sock);
+		globals.irc_connected = 0;
+		FreeSaslResponse(&sasl);
+		return NULL;
+	}
 
-	// Send basic IRC commands
-	sprintf(buffer, "NICK %s\r\n", globals.nick);
-	SSL_write(globals.pSSL, buffer, strlen(buffer));
+	// Start IRCv3 capability negotiation before registration. This keeps the
+	// server from completing registration until SASL succeeds and CAP END is sent.
+	Log_fp(OUT, "CAP LS 302");
+	if (IrcWrite("CAP LS 302\r\n") <= 0)
+		goto disconnect;
 
-	sprintf(buffer, "USER %s 0 * :IRC bot for Github webhooks\r\n",
+	snprintf(buffer, sizeof(buffer), "NICK %s\r\n", globals.nick);
+	if (IrcWrite(buffer) <= 0)
+		goto disconnect;
+
+	snprintf(buffer, sizeof(buffer), "USER %s 0 * :IRC bot for Github webhooks\r\n",
 		globals.nick);
-	SSL_write(globals.pSSL, buffer, strlen(buffer));
+	if (IrcWrite(buffer) <= 0)
+		goto disconnect;
 
-	const char *env_pass = getenv("LUNABOT_NICKSERV_PASSWORD");
-	if (env_pass != NULL && strlen(env_pass) > 0) {
-		sprintf(buffer, "PRIVMSG NickServ :IDENTIFY %s\r\n", env_pass);
-		Log_fp(OUT, "PRIVMSG NickServ :IDENTIFY ********");
-		SSL_write(globals.pSSL, buffer, strlen(buffer));
-	}
-	else {
-		FILE *fp = fopen(".passwd", "r");
-		if (fp == NULL) {
-			sprintf(buffer_log, "lunabot::IrcConnect() error: Cannot open .passwd: %s", strerror(errno));
-			Log_fp(LOCAL, buffer_log);
-			
-			globals.irc_connected = 0;
-			return NULL;
-		}
-
-		char pass[BUFFER_SIZE - 30];
-		fgets(pass, BUFFER_SIZE - 31, fp);
-		fclose(fp);
-		if (pass[strlen(pass)-1] == '\n')
-			pass[strlen(pass)-1] = '\0';
-		sprintf(buffer, "PRIVMSG NickServ :IDENTIFY %s\r\n", pass);
-		Log_fp(OUT, "PRIVMSG NickServ :IDENTIFY ********");
-		SSL_write(globals.pSSL, buffer, strlen(buffer));
-	}
-	
-	// Not logged in with NickServ yet, exposes hostmask, you can comment
-	// this and send manually in the terminal if you prefer
-	sprintf(buffer, "JOIN %s\r\n", globals.channel);
-	SSL_write(globals.pSSL, buffer, strlen(buffer));
-
-	// Listen for server messages
+	// Listen for complete IRC lines. SSL_read() boundaries do not correspond to
+	// IRC line boundaries, so retain partial lines and process each CRLF record.
 	while (1) {
-		char buffer2[BUFFER_SIZE*2];
-		memset(buffer, 0, BUFFER_SIZE);
-		int bytes = SSL_read(globals.pSSL, buffer, BUFFER_SIZE - 1);
+		int bytes = SSL_read(globals.pSSL, read_buffer, sizeof(read_buffer));
 		if (bytes <= 0)
 			break;
 
-		if (buffer[bytes-1] == '\n')
-			buffer[bytes-1] = '\0'; // Remove ending '\n'
-		if (buffer[bytes-2] == '\r')
-			buffer[bytes-2] = '\0'; // Remove ending '\r'
-		
-		
-		// Respond to ping requests with a pong message
-		if (strncmp(buffer, "PING", 4) == 0) {
-			sprintf(buffer2, "PONG %s\r\n", buffer + 5);
-			SSL_write(globals.pSSL, buffer2, strlen(buffer2));
-			continue;
+		for (int i = 0; i < bytes; i++) {
+			if (read_buffer[i] == '\n') {
+				if (line_len > 0 && line_buffer[line_len - 1] == '\r')
+					line_len--;
+				line_buffer[line_len] = '\0';
+				if (line_len > 0 && HandleIrcLine(line_buffer, &sasl) != 0)
+					goto disconnect;
+				line_len = 0;
+				continue;
+			}
+			if (line_len >= sizeof(line_buffer) - 1) {
+				Log_fp(LOCAL, "lunabot::IrcConnect() error: IRC line is too long");
+				goto disconnect;
+			}
+			line_buffer[line_len++] = read_buffer[i];
 		}
-		else
-			Log_fp(IN, buffer);
 	}
 
+	disconnect:
+	globals.irc_ready = 0;
+	FreeSaslResponse(&sasl);
+	pthread_mutex_lock(&globals.irc_write_mutex);
+	SSL *ssl = globals.pSSL;
+	globals.pSSL = NULL;
+	pthread_mutex_unlock(&globals.irc_write_mutex);
+	if (ssl != NULL) {
+		SSL_shutdown(ssl);
+		SSL_free(ssl);
+	}
+	SSL_CTX_free(ctx);
 	close(globals.irc.irc_sock);
 	globals.irc_connected = 0;
 	
@@ -344,7 +664,7 @@ void *ConsoleReadLoop(void *argp) {
 			char buffer2[BUFFER_SIZE * 2];
 			memset(buffer2, 0, BUFFER_SIZE * 2);
 			sprintf(buffer2, "%s\r\n", buffer_line);
-			SSL_write(globals.pSSL, buffer2, strlen(buffer2));
+			IrcWrite(buffer2);
 		}
 	}
 	
@@ -490,6 +810,10 @@ void ParseArgs(int *argc, char **argv) {
 // Program entry point
 int main(int argc, char **argv) {
 	ReloadLibrary();
+	if (pthread_mutex_init(&globals.irc_write_mutex, NULL) != 0) {
+		fprintf(stderr, "lunabot error: Cannot initialize IRC write mutex\n");
+		return 1;
+	}
 
 	ParseConfig();
 	ParseArgs(&argc, argv);
@@ -533,4 +857,3 @@ int main(int argc, char **argv) {
 
 	return 0;
 }
-
