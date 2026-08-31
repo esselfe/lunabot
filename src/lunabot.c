@@ -203,11 +203,12 @@ static int ReadSaslPassword(char *password, size_t password_size) {
 		env_pass = getenv("LUNABOT_NICKSERV_PASSWORD");
 
 	if (env_pass != NULL && *env_pass != '\0') {
+		size_t len = strlen(env_pass);
 		if (strlen(env_pass) >= password_size) {
 			Log_fp(LOCAL, "lunabot::ReadSaslPassword() error: SASL password is too long");
 			return -1;
 		}
-		strcpy(password, env_pass);
+		strncpy(password, env_pass, len + 1);
 		return 0;
 	}
 
@@ -226,7 +227,17 @@ static int ReadSaslPassword(char *password, size_t password_size) {
 		return -1;
 	}
 	fclose(fp);
-	password[strcspn(password, "\r\n")] = '\0';
+
+	for (size_t i = 0; i < password_size; i++) {
+		if (password[i] == '\0')
+			break;
+
+		if (password[i] == '\r' || password[i] == '\n') {
+			password[i] = '\0';
+			break;
+		}
+	}
+
 	if (*password == '\0') {
 		Log_fp(LOCAL, "lunabot::ReadSaslPassword() error: SASL password is empty");
 		return -1;
