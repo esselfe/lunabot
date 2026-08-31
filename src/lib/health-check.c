@@ -67,20 +67,28 @@ enum MHD_Result HandleHealthCheck(struct MHD_Connection *connection) {
 
 	if (libglobals->health_check < 0) {
 		libglobals->health_check = 0;
-		char *data = "<html><body><h2>500 Service error</h2></body></html>";
+		char *data =
+"<html><head><title>lunabot health check</title></head>\n"
+"<body>\n<h2>500 Service error</h2>\n</body>\n</html>\n";
 		struct MHD_Response *response500;
 		response500 = MHD_create_response_from_buffer(strlen(data),
 				data, MHD_RESPMEM_PERSISTENT);
+		MHD_add_response_header(response500,
+				"Content-Type", "text/html; charset=UTF-8");
 		int ret = MHD_queue_response(connection, 500, response500);
 		MHD_destroy_response(response500);
 		return ret;
 	}
 
 	libglobals->health_check = 0;
-	char *data = "<html><body><h2>200 OK</h2></body></html>";
+	char *data =
+"<html><head><title>lunabot health check</title></head>\n"
+"<body>\n<h2>200 OK</h2>\n</body>\n</html>\n";
 	struct MHD_Response *response200;
 	response200 = MHD_create_response_from_buffer(strlen(data),
 			data, MHD_RESPMEM_PERSISTENT);
+	MHD_add_response_header(response200,
+			"Content-Type", "text/html; charset=UTF-8");
 	int ret = MHD_queue_response(connection, 200, response200);
 	MHD_destroy_response(response200);
 	return ret;
