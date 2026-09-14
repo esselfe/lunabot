@@ -378,8 +378,13 @@ static int HandleIrcLine(char *line, struct SaslContext *sasl) {
 
 	Log_fp(IN, line);
 	GetIrcCommand(line, command, sizeof(command));
-	if (strcmp(command, "PONG") == 0 && globals.health_check == 1)
+
+	pthread_mutex_lock(&globals.health_check_mutex);
+	if (strcmp(command, "PONG") == 0 && globals.health_check == 1) {
+		Log_fp(LOCAL, "lunabot::HandleIrcLine(): health check received PONG");
 		globals.health_check = 2;
+	}
+	pthread_mutex_unlock(&globals.health_check_mutex);
 
 	if (strcmp(command, "CAP") == 0 && strstr(line, " LS ") != NULL &&
 	  sasl->state == SASL_WAIT_CAP_LS) {
@@ -822,7 +827,11 @@ void ParseArgs(int *argc, char **argv) {
 int main(int argc, char **argv) {
 	ReloadLibrary();
 	if (pthread_mutex_init(&globals.irc_write_mutex, NULL) != 0) {
-		fprintf(stderr, "lunabot error: Cannot initialize IRC write mutex\n");
+		fprintf(stderr, "lunabot error: Cannot initialize IRC write mutex.\n");
+		return 1;
+	}
+	if (pthread_mutex_init(&globals.health_check_mutex, NULL) != 0) {
+		fprintf(stderr, "lunabot error: Cannot initialize health check mutex.\n");
 		return 1;
 	}
 

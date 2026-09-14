@@ -12,14 +12,19 @@
 
 static void *HealthCheckTimeoutFunc(void *argp) {
 	time_t current, start = time(NULL);
-	while (libglobals->health_check == 1) {
-		current = time(NULL);
-		if (current > start + 10) {
-			libglobals->health_check = -1;
-			break;
+	while (1) {
+		pthread_mutex_lock(&libglobals->health_check_mutex);
+		if (libglobals->health_check == 1) {
+			current = time(NULL);
+			if (current > start + 10) {
+				libglobals->health_check = -1;
+				pthread_mutex_unlock(&libglobals->health_check_mutex);
+				break;
+			}
+			else
+				sleep(1);
 		}
-		else
-			sleep(1);
+		pthread_mutex_unlock(&libglobals->health_check_mutex);
 	}
 	
 	return NULL;
@@ -42,13 +47,17 @@ enum MHD_Result HandleHealthCheck(struct MHD_Connection *connection) {
 	  libglobals->health_check_tprev + libglobals->health_check_wait) {
 		libglobals->health_check_tprev = libglobals->health_check_t0;
 
+		pthread_mutex_lock(&libglobals->health_check_mutex);
 		libglobals->health_check = 1;
+		pthread_mutex_unlock(&libglobals->health_check_mutex);
 		char buffer2[BUFFER_SIZE];
 		sprintf(buffer2, "PING NickServ\r\n");
 		pthread_mutex_lock(&libglobals->irc_write_mutex);
 		if (libglobals->pSSL == NULL || !libglobals->irc_ready) {
 			pthread_mutex_unlock(&libglobals->irc_write_mutex);
+			pthread_mutex_lock(&libglobals->health_check_mutex);
 			libglobals->health_check = -1;
+			pthread_mutex_unlock(&libglobals->health_check_mutex);
 		} else {
 			SSL_write(libglobals->pSSL, buffer2, strlen(buffer2));
 			pthread_mutex_unlock(&libglobals->irc_write_mutex);
@@ -57,14 +66,26 @@ enum MHD_Result HandleHealthCheck(struct MHD_Connection *connection) {
 		if (libglobals->health_check == 1)
 			HealthCheckTimeoutStart();
 
-		while (libglobals->health_check == 1)
-			sleep(1);
+		while (1) {
+			pthread_mutex_lock(&libglobals->health_check_mutex);
+			if (libglobals->health_check != 1) {
+				pthread_mutex_unlock(&libglobals->health_check_mutex);
+				break;
+			}
+			else {
+				pthread_mutex_unlock(&libglobals->health_check_mutex);
+				sleep(1);
+			}
+		}
 	}
 	else {
 		sleep(1);
+		pthread_mutex_lock(&libglobals->health_check_mutex);
 		libglobals->health_check = 2;
+		pthread_mutex_unlock(&libglobals->health_check_mutex);
 	}
 
+	pthread_mutex_lock(&libglobals->health_check_mutex);
 	if (libglobals->health_check < 0) {
 		libglobals->health_check = 0;
 		char *data =
@@ -77,10 +98,12 @@ enum MHD_Result HandleHealthCheck(struct MHD_Connection *connection) {
 				"Content-Type", "text/html; charset=UTF-8");
 		int ret = MHD_queue_response(connection, 500, response500);
 		MHD_destroy_response(response500);
+		pthread_mutex_unlock(&libglobals->health_check_mutex);
 		return ret;
 	}
 
 	libglobals->health_check = 0;
+	pthread_mutex_unlock(&libglobals->health_check_mutex);
 	char *data =
 "<html><head><title>lunabot health check</title></head>\n"
 "<body>\n<h2>200 OK</h2>\n</body>\n</html>\n";

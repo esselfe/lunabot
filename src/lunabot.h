@@ -61,6 +61,7 @@ struct GlobalVariables {
 	char *context_name;
 	SSL *pSSL;
 	pthread_mutex_t irc_write_mutex;
+	pthread_mutex_t health_check_mutex;
 	struct MHD_Daemon *httpdaemon;
 	unsigned int only_core_labels; // Specific to Lunar-Linux
 	unsigned int ignore_labels;
